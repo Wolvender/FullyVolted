@@ -130,6 +130,12 @@ namespace FullyVolted.EditorTools
 
                 var climbInteractable = rung.AddComponent<ClimbInteractable>();
                 climbInteractable.climbProvider = climbProvider;
+
+                // ClimbInteractable is [RequireComponent(typeof(Rigidbody))], so adding it also adds a
+                // dynamic body. Rungs are fixed holds - the player moves, not the rung.
+                var body = rung.GetComponent<Rigidbody>();
+                body.isKinematic = true;
+                body.useGravity = false;
             }
         }
 
