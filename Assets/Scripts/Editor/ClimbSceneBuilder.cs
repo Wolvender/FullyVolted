@@ -22,6 +22,7 @@ namespace FullyVolted.EditorTools
         private const float FirstRungHeight = 0.9f;
         private const float RungSpacing = 0.5f;
         private const float RungOffsetX = 0.45f;
+        private const float RungInteractionDistance = 0.3f;
         private const float PlatformSurfaceY = 4.775f;
 
         [MenuItem("Tools/FullyVolted/Build Climb Scene")]
@@ -146,6 +147,10 @@ namespace FullyVolted.EditorTools
 
                 var climbInteractable = rung.AddComponent<ClimbInteractable>();
                 climbInteractable.climbProvider = climbProvider;
+
+                // Default is 0.1m, which is hard to hit while reaching and impossible to trigger with a
+                // pointing ray. This gates hover and grab alike, so it stays within arm's reach.
+                climbInteractable.maxInteractionDistance = RungInteractionDistance;
 
                 // ClimbInteractable is [RequireComponent(typeof(Rigidbody))], so adding it also adds a
                 // dynamic body. Rungs are fixed holds - the player moves, not the rung.
