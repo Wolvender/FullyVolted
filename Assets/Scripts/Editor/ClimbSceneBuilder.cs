@@ -194,7 +194,7 @@ namespace FullyVolted.EditorTools
             text.alignment = TextAnchor.MiddleCenter;
             text.fontSize = 72;
             text.color = Color.white;
-            text.font = AssetDatabase.GetBuiltinExtraResource<Font>("Arial.ttf");
+            text.font = LoadLegacyUiFont();
 
             canvasObject.SetActive(false);
             return canvasObject;
@@ -215,6 +215,16 @@ namespace FullyVolted.EditorTools
             var serializedObserver = new SerializedObject(observer);
             serializedObserver.FindProperty("procedureController").objectReferenceValue = controller;
             serializedObserver.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        private static Font LoadLegacyUiFont()
+        {
+            // Unity replaced the built-in Arial with LegacyRuntime.ttf; older versions only have Arial.
+            var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            if (font == null)
+                font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+
+            return font;
         }
 
         private static GameObject CreatePrimitive(PrimitiveType type, string objectName, Vector3 position, Vector3 scale)
