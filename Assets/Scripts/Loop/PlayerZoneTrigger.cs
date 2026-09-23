@@ -23,8 +23,9 @@ namespace FullyVolted.Loop
         {
             if (!IsPlayerBody(other))
             {
-                if (logDetections)
-                    Debug.Log($"[Zone] {zoneName}: ignored '{other.name}' (not the player body)", this);
+                // Only rig parts are worth reporting. Scenery sitting inside a zone is not a near miss.
+                if (logDetections && other.GetComponentInParent<XROrigin>() != null)
+                    Debug.Log($"[Zone] {zoneName}: ignored '{other.name}' (rig part, not the body)", this);
 
                 return;
             }
