@@ -15,6 +15,7 @@ namespace FullyVolted.EditorTools
         private const string ScenePath = "Assets/Scenes/ClimbLoop.unity";
         private const string MaterialFolder = "Assets/Materials";
         private const string RigPrefabName = "XR Origin (XR Rig)";
+        private const string SimulatorPrefabName = "XR Interaction Simulator";
 
         private const int RungCount = 10;
         private const float FirstRungHeight = 0.9f;
@@ -25,7 +26,7 @@ namespace FullyVolted.EditorTools
         [MenuItem("Tools/FullyVolted/Build Climb Scene")]
         public static void BuildClimbScene()
         {
-            var rigPrefab = LoadRigPrefab();
+            var rigPrefab = LoadPrefab(RigPrefabName);
             if (rigPrefab == null)
             {
                 EditorUtility.DisplayDialog("Climb Scene Builder",
@@ -45,6 +46,7 @@ namespace FullyVolted.EditorTools
             var climbProvider = InstantiateRig(rigPrefab);
             CreateRungs(climbProvider);
             EnsureInteractionManager();
+            AddSimulator();
 
             var bottomZone = CreateZone("Bottom Zone", "Ground", new Vector3(1.2f, 1f, -0.5f), new Vector3(5f, 2f, 5f));
             var topZone = CreateZone("Top Zone", "Work Platform", new Vector3(1.5f, 5.35f, 0f), new Vector3(2.2f, 1.2f, 1.8f));
@@ -59,16 +61,29 @@ namespace FullyVolted.EditorTools
             Debug.Log("[FullyVolted] Built climb scene at " + ScenePath);
         }
 
-        private static GameObject LoadRigPrefab()
+        private static GameObject LoadPrefab(string prefabName)
         {
-            foreach (var guid in AssetDatabase.FindAssets(RigPrefabName + " t:Prefab"))
+            foreach (var guid in AssetDatabase.FindAssets(prefabName + " t:Prefab"))
             {
                 var path = AssetDatabase.GUIDToAssetPath(guid);
-                if (System.IO.Path.GetFileNameWithoutExtension(path) == RigPrefabName)
+                if (System.IO.Path.GetFileNameWithoutExtension(path) == prefabName)
                     return AssetDatabase.LoadAssetAtPath<GameObject>(path);
             }
 
             return null;
+        }
+
+        private static void AddSimulator()
+        {
+            var simulatorPrefab = LoadPrefab(SimulatorPrefabName);
+            if (simulatorPrefab == null)
+            {
+                Debug.LogWarning("[FullyVolted] XR Interaction Simulator prefab not found; " +
+                                 "desktop testing without a headset will not work. Run Tools > FullyVolted > Import XRI Samples.");
+                return;
+            }
+
+            PrefabUtility.InstantiatePrefab(simulatorPrefab);
         }
 
         private static ClimbProvider InstantiateRig(GameObject rigPrefab)
