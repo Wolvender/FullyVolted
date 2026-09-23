@@ -1,3 +1,4 @@
+using FullyVolted.Climbing;
 using FullyVolted.Loop;
 using FullyVolted.Procedure;
 using Unity.XR.CoreUtils;
@@ -151,6 +152,8 @@ namespace FullyVolted.EditorTools
                 var body = rung.GetComponent<Rigidbody>();
                 body.isKinematic = true;
                 body.useGravity = false;
+
+                rung.AddComponent<ClimbHoldHighlight>();
             }
         }
 
