@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using FullyVolted.Climbing;
 using FullyVolted.Loop;
 using FullyVolted.Procedure;
@@ -52,7 +53,6 @@ namespace FullyVolted.EditorTools
             CreatePlatform();
 
             var rig = InstantiateRig(rigPrefab);
-            var startPose = CreateStartPose();
 
             var climbProvider = rig.GetComponentInChildren<ClimbProvider>(true);
             if (climbProvider == null)
@@ -68,11 +68,12 @@ namespace FullyVolted.EditorTools
             var topZone = CreateZone("Top Zone", "Work Platform", new Vector3(1.5f, 5.35f, 0f), new Vector3(2.2f, 1.2f, 1.8f), playerHead);
             var completeScreen = CreateCompleteScreen(out var restartButton);
 
-            CreateProcedureController(topZone, bottomZone, completeScreen, rig.transform, startPose, restartButton);
+            CreateProcedureController(topZone, bottomZone, completeScreen, restartButton);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
             AssetDatabase.SaveAssets();
+            EnsureSceneInBuildSettings();
 
             Debug.Log("[FullyVolted] Built climb scene at " + ScenePath);
         }
@@ -109,6 +110,18 @@ namespace FullyVolted.EditorTools
             return rig;
         }
 
+        private static void EnsureSceneInBuildSettings()
+        {
+            // The restart button reloads the scene by name, which only resolves for scenes listed here.
+            var scenes = new List<EditorBuildSettingsScene>(EditorBuildSettings.scenes);
+            if (scenes.Exists(entry => entry.path == ScenePath))
+                return;
+
+            scenes.Add(new EditorBuildSettingsScene(ScenePath, true));
+            EditorBuildSettings.scenes = scenes.ToArray();
+            Debug.Log("[FullyVolted] Added " + ScenePath + " to Build Settings so the restart button can reload it.");
+        }
+
         private static Transform ResolvePlayerHead(GameObject rig)
         {
             var origin = rig.GetComponentInChildren<XROrigin>(true);
@@ -123,12 +136,6 @@ namespace FullyVolted.EditorTools
             return null;
         }
 
-        private static Transform CreateStartPose()
-        {
-            var startPose = new GameObject("Start Pose");
-            startPose.transform.SetPositionAndRotation(RigStartPosition, RigStartRotation);
-            return startPose.transform;
-        }
 
         private static void CreateLight()
         {
@@ -314,7 +321,7 @@ namespace FullyVolted.EditorTools
         }
 
         private static void CreateProcedureController(PlayerZoneTrigger topZone, PlayerZoneTrigger bottomZone,
-            GameObject completeScreen, Transform playerRig, Transform startPose, Button restartButton)
+            GameObject completeScreen, Button restartButton)
         {
             var controllerObject = new GameObject("Procedure Controller");
             var controller = controllerObject.AddComponent<ProcedureController>();
@@ -323,8 +330,6 @@ namespace FullyVolted.EditorTools
             serialized.FindProperty("topZone").objectReferenceValue = topZone;
             serialized.FindProperty("bottomZone").objectReferenceValue = bottomZone;
             serialized.FindProperty("completeScreen").objectReferenceValue = completeScreen;
-            serialized.FindProperty("playerRig").objectReferenceValue = playerRig;
-            serialized.FindProperty("startPose").objectReferenceValue = startPose;
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
             if (restartButton != null)
