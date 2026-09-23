@@ -12,6 +12,8 @@ namespace FullyVolted.Procedure
         [SerializeField] private PlayerZoneTrigger topZone;
         [SerializeField] private PlayerZoneTrigger bottomZone;
         [SerializeField] private GameObject completeScreen;
+        [SerializeField] private Transform playerRig;
+        [SerializeField] private Transform startPose;
 
         private void Start()
         {
@@ -54,6 +56,28 @@ namespace FullyVolted.Procedure
         public void CompleteProcedure()
         {
             TransitionTo(new ProcedureCompleteState(completeScreen));
+        }
+
+        public void RestartProcedure()
+        {
+            MoveRigToStart();
+            TransitionTo(new ClimbState(this, topZone, bottomZone));
+        }
+
+        private void MoveRigToStart()
+        {
+            if (playerRig == null || startPose == null)
+                return;
+
+            // A CharacterController overwrites direct transform writes, so it has to be off while we move.
+            var characterController = playerRig.GetComponent<CharacterController>();
+            if (characterController != null)
+                characterController.enabled = false;
+
+            playerRig.SetPositionAndRotation(startPose.position, startPose.rotation);
+
+            if (characterController != null)
+                characterController.enabled = true;
         }
     }
 }

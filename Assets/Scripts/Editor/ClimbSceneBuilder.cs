@@ -3,11 +3,14 @@ using FullyVolted.Loop;
 using FullyVolted.Procedure;
 using Unity.XR.CoreUtils;
 using UnityEditor;
+using UnityEditor.Events;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit;
 using UnityEngine.XR.Interaction.Toolkit.Locomotion.Climbing;
+using UnityEngine.XR.Interaction.Toolkit.UI;
 
 namespace FullyVolted.EditorTools
 {
@@ -24,6 +27,9 @@ namespace FullyVolted.EditorTools
         private const float RungOffsetX = 0.45f;
         private const float RungInteractionDistance = 0.3f;
         private const float PlatformSurfaceY = 4.775f;
+
+        private static readonly Vector3 RigStartPosition = new Vector3(2.2f, 0f, -1.4f);
+        private static readonly Quaternion RigStartRotation = Quaternion.Euler(0f, -58f, 0f);
 
         [MenuItem("Tools/FullyVolted/Build Climb Scene")]
         public static void BuildClimbScene()
@@ -45,16 +51,23 @@ namespace FullyVolted.EditorTools
             CreatePole();
             CreatePlatform();
 
-            var climbProvider = InstantiateRig(rigPrefab);
+            var rig = InstantiateRig(rigPrefab);
+            var startPose = CreateStartPose();
+
+            var climbProvider = rig.GetComponentInChildren<ClimbProvider>(true);
+            if (climbProvider == null)
+                Debug.LogWarning("[FullyVolted] No ClimbProvider found on the rig; climbing will not work.");
+
             CreateRungs(climbProvider);
             EnsureInteractionManager();
+            EnsureEventSystem();
             AddSimulator();
 
             var bottomZone = CreateZone("Bottom Zone", "Ground", new Vector3(1.2f, 1f, -0.5f), new Vector3(5f, 2f, 5f));
             var topZone = CreateZone("Top Zone", "Work Platform", new Vector3(1.5f, 5.35f, 0f), new Vector3(2.2f, 1.2f, 1.8f));
-            var completeScreen = CreateCompleteScreen();
+            var completeScreen = CreateCompleteScreen(out var restartButton);
 
-            CreateProcedureController(topZone, bottomZone, completeScreen);
+            CreateProcedureController(topZone, bottomZone, completeScreen, rig.transform, startPose, restartButton);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
@@ -88,16 +101,18 @@ namespace FullyVolted.EditorTools
             PrefabUtility.InstantiatePrefab(simulatorPrefab);
         }
 
-        private static ClimbProvider InstantiateRig(GameObject rigPrefab)
+        private static GameObject InstantiateRig(GameObject rigPrefab)
         {
             var rig = (GameObject)PrefabUtility.InstantiatePrefab(rigPrefab);
-            rig.transform.SetPositionAndRotation(new Vector3(2.2f, 0f, -1.4f), Quaternion.Euler(0f, -135f, 0f));
+            rig.transform.SetPositionAndRotation(RigStartPosition, RigStartRotation);
+            return rig;
+        }
 
-            var climbProvider = rig.GetComponentInChildren<ClimbProvider>(true);
-            if (climbProvider == null)
-                Debug.LogWarning("[FullyVolted] No ClimbProvider found on the rig; climbing will not work.");
-
-            return climbProvider;
+        private static Transform CreateStartPose()
+        {
+            var startPose = new GameObject("Start Pose");
+            startPose.transform.SetPositionAndRotation(RigStartPosition, RigStartRotation);
+            return startPose.transform;
         }
 
         private static void CreateLight()
@@ -135,6 +150,12 @@ namespace FullyVolted.EditorTools
         {
             var parent = new GameObject("Rungs").transform;
             var rungMaterial = GetMaterial("Rung", new Color(0.85f, 0.55f, 0.12f));
+
+            // Without the keyword, the shader never samples _EmissionColor, so the hover glow is invisible.
+            rungMaterial.EnableKeyword("_EMISSION");
+            rungMaterial.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+            rungMaterial.SetColor("_EmissionColor", Color.black);
+            EditorUtility.SetDirty(rungMaterial);
 
             for (int i = 0; i < RungCount; i++)
             {
@@ -188,48 +209,95 @@ namespace FullyVolted.EditorTools
             return trigger;
         }
 
-        private static GameObject CreateCompleteScreen()
+        private static GameObject CreateCompleteScreen(out Button restartButton)
         {
             var canvasObject = new GameObject("Complete Screen");
-            canvasObject.transform.SetPositionAndRotation(new Vector3(1.4f, 2f, 1.6f), Quaternion.Euler(0f, 160f, 0f));
-            canvasObject.transform.localScale = Vector3.one * 0.004f;
+            canvasObject.transform.SetPositionAndRotation(new Vector3(0.5f, 1.7f, -0.35f), Quaternion.Euler(0f, 122f, 0f));
+            canvasObject.transform.localScale = Vector3.one * 0.003f;
 
             var canvas = canvasObject.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.WorldSpace;
             canvasObject.AddComponent<CanvasScaler>();
+            canvasObject.AddComponent<TrackedDeviceGraphicRaycaster>();
 
             var rectTransform = (RectTransform)canvasObject.transform;
-            rectTransform.sizeDelta = new Vector2(800f, 300f);
+            rectTransform.sizeDelta = new Vector2(700f, 400f);
 
-            var background = new GameObject("Background", typeof(Image));
-            background.transform.SetParent(canvasObject.transform, false);
-            var backgroundRect = (RectTransform)background.transform;
-            backgroundRect.anchorMin = Vector2.zero;
-            backgroundRect.anchorMax = Vector2.one;
-            backgroundRect.offsetMin = Vector2.zero;
-            backgroundRect.offsetMax = Vector2.zero;
-            background.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.75f);
+            CreateStretchedImage("Background", canvasObject.transform, new Color(0.04f, 0.05f, 0.07f, 0.88f));
 
-            var label = new GameObject("Label", typeof(Text));
-            label.transform.SetParent(canvasObject.transform, false);
-            var labelRect = (RectTransform)label.transform;
-            labelRect.anchorMin = Vector2.zero;
-            labelRect.anchorMax = Vector2.one;
-            labelRect.offsetMin = Vector2.zero;
-            labelRect.offsetMax = Vector2.zero;
+            var title = CreateLabel("Title", canvasObject.transform, "PROCEDURE COMPLETE", 64);
+            var titleRect = (RectTransform)title.transform;
+            titleRect.anchorMin = new Vector2(0f, 0.5f);
+            titleRect.anchorMax = new Vector2(1f, 1f);
+            titleRect.offsetMin = Vector2.zero;
+            titleRect.offsetMax = Vector2.zero;
 
-            var text = label.GetComponent<Text>();
-            text.text = "PROCEDURE COMPLETE";
-            text.alignment = TextAnchor.MiddleCenter;
-            text.fontSize = 72;
-            text.color = Color.white;
-            text.font = LoadLegacyUiFont();
+            var buttonObject = new GameObject("Restart Button", typeof(Image), typeof(Button));
+            buttonObject.transform.SetParent(canvasObject.transform, false);
+            buttonObject.GetComponent<Image>().color = new Color(0.85f, 0.55f, 0.12f);
+
+            var buttonRect = (RectTransform)buttonObject.transform;
+            buttonRect.anchorMin = new Vector2(0.5f, 0f);
+            buttonRect.anchorMax = new Vector2(0.5f, 0f);
+            buttonRect.pivot = new Vector2(0.5f, 0f);
+            buttonRect.anchoredPosition = new Vector2(0f, 60f);
+            buttonRect.sizeDelta = new Vector2(400f, 110f);
+
+            var buttonLabel = CreateLabel("Label", buttonObject.transform, "CLIMB AGAIN", 44);
+            var buttonLabelRect = (RectTransform)buttonLabel.transform;
+            buttonLabelRect.anchorMin = Vector2.zero;
+            buttonLabelRect.anchorMax = Vector2.one;
+            buttonLabelRect.offsetMin = Vector2.zero;
+            buttonLabelRect.offsetMax = Vector2.zero;
+            buttonLabel.GetComponent<Text>().color = Color.black;
+
+            restartButton = buttonObject.GetComponent<Button>();
 
             canvasObject.SetActive(false);
             return canvasObject;
         }
 
-        private static void CreateProcedureController(PlayerZoneTrigger topZone, PlayerZoneTrigger bottomZone, GameObject completeScreen)
+        private static void CreateStretchedImage(string objectName, Transform parent, Color color)
+        {
+            var image = new GameObject(objectName, typeof(Image));
+            image.transform.SetParent(parent, false);
+
+            var rect = (RectTransform)image.transform;
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+
+            image.GetComponent<Image>().color = color;
+        }
+
+        private static GameObject CreateLabel(string objectName, Transform parent, string content, int fontSize)
+        {
+            var label = new GameObject(objectName, typeof(Text));
+            label.transform.SetParent(parent, false);
+
+            var text = label.GetComponent<Text>();
+            text.text = content;
+            text.alignment = TextAnchor.MiddleCenter;
+            text.fontSize = fontSize;
+            text.color = Color.white;
+            text.font = LoadLegacyUiFont();
+
+            return label;
+        }
+
+        private static void EnsureEventSystem()
+        {
+            if (Object.FindFirstObjectByType<EventSystem>() != null)
+                return;
+
+            var eventSystem = new GameObject("EventSystem");
+            eventSystem.AddComponent<EventSystem>();
+            eventSystem.AddComponent<XRUIInputModule>();
+        }
+
+        private static void CreateProcedureController(PlayerZoneTrigger topZone, PlayerZoneTrigger bottomZone,
+            GameObject completeScreen, Transform playerRig, Transform startPose, Button restartButton)
         {
             var controllerObject = new GameObject("Procedure Controller");
             var controller = controllerObject.AddComponent<ProcedureController>();
@@ -238,7 +306,12 @@ namespace FullyVolted.EditorTools
             serialized.FindProperty("topZone").objectReferenceValue = topZone;
             serialized.FindProperty("bottomZone").objectReferenceValue = bottomZone;
             serialized.FindProperty("completeScreen").objectReferenceValue = completeScreen;
+            serialized.FindProperty("playerRig").objectReferenceValue = playerRig;
+            serialized.FindProperty("startPose").objectReferenceValue = startPose;
             serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            if (restartButton != null)
+                UnityEventTools.AddPersistentListener(restartButton.onClick, controller.RestartProcedure);
 
             var observer = controllerObject.AddComponent<DebugStepObserver>();
             var serializedObserver = new SerializedObject(observer);

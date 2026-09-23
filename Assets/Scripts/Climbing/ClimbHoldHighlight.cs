@@ -8,14 +8,20 @@ namespace FullyVolted.Climbing
     public class ClimbHoldHighlight : MonoBehaviour
     {
         private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+        private static readonly int EmissionColorId = Shader.PropertyToID("_EmissionColor");
 
         private MaterialPropertyBlock propertyBlock;
         private XRBaseInteractable interactable;
         private Renderer holdRenderer;
         private Color restColor;
+        private float blend;
+        private float targetBlend;
 
-        [SerializeField] private Color highlightTint = Color.white;
-        [SerializeField, Range(0f, 1f)] private float highlightStrength = 0.4f;
+        [SerializeField] private Color highlightTint = new Color(1f, 0.93f, 0.72f);
+        [SerializeField, Range(0f, 1f)] private float highlightStrength = 0.55f;
+        [SerializeField] private Color glowColor = new Color(1f, 0.62f, 0.18f);
+        [SerializeField, Range(0f, 4f)] private float glowIntensity = 1.6f;
+        [SerializeField, Min(0.1f)] private float fadeSpeed = 9f;
 
         private void Awake()
         {
@@ -23,6 +29,7 @@ namespace FullyVolted.Climbing
             holdRenderer = GetComponent<Renderer>();
             propertyBlock = new MaterialPropertyBlock();
             restColor = holdRenderer.sharedMaterial.GetColor(BaseColorId);
+            ApplyBlend();
         }
 
         private void OnEnable()
@@ -35,12 +42,24 @@ namespace FullyVolted.Climbing
         {
             interactable.hoverEntered.RemoveListener(HandleHoverEntered);
             interactable.hoverExited.RemoveListener(HandleHoverExited);
-            ApplyColor(restColor);
+
+            blend = 0f;
+            targetBlend = 0f;
+            ApplyBlend();
+        }
+
+        private void Update()
+        {
+            if (Mathf.Approximately(blend, targetBlend))
+                return;
+
+            blend = Mathf.MoveTowards(blend, targetBlend, fadeSpeed * Time.deltaTime);
+            ApplyBlend();
         }
 
         private void HandleHoverEntered(HoverEnterEventArgs args)
         {
-            ApplyColor(Color.Lerp(restColor, highlightTint, highlightStrength));
+            targetBlend = 1f;
         }
 
         private void HandleHoverExited(HoverExitEventArgs args)
@@ -49,13 +68,16 @@ namespace FullyVolted.Climbing
             if (interactable.isHovered)
                 return;
 
-            ApplyColor(restColor);
+            targetBlend = 0f;
         }
 
-        private void ApplyColor(Color color)
+        private void ApplyBlend()
         {
+            var eased = blend * blend * (3f - 2f * blend);
+
             holdRenderer.GetPropertyBlock(propertyBlock);
-            propertyBlock.SetColor(BaseColorId, color);
+            propertyBlock.SetColor(BaseColorId, Color.Lerp(restColor, highlightTint, eased * highlightStrength));
+            propertyBlock.SetColor(EmissionColorId, glowColor * (eased * glowIntensity));
             holdRenderer.SetPropertyBlock(propertyBlock);
         }
     }
