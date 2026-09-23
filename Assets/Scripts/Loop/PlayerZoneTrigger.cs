@@ -1,5 +1,4 @@
 using System;
-using Unity.XR.CoreUtils;
 using UnityEngine;
 
 namespace FullyVolted.Loop
@@ -7,46 +6,46 @@ namespace FullyVolted.Loop
     [RequireComponent(typeof(Collider))]
     public class PlayerZoneTrigger : MonoBehaviour
     {
+        private Collider zoneCollider;
+        private bool wasInside;
+
         [SerializeField] private string zoneName = "Zone";
+        [SerializeField] private Transform playerHead;
         [SerializeField] private bool logDetections = true;
 
         public event Action Entered;
 
         public string ZoneName => zoneName;
+        public bool IsPlayerInside => wasInside;
 
         private void Reset()
         {
             GetComponent<Collider>().isTrigger = true;
         }
 
-        private void OnTriggerEnter(Collider other)
+        private void Awake()
         {
-            if (!IsPlayerBody(other))
-            {
-                // Only rig parts are worth reporting. Scenery sitting inside a zone is not a near miss.
-                if (logDetections && other.GetComponentInParent<XROrigin>() != null)
-                    Debug.Log($"[Zone] {zoneName}: ignored '{other.name}' (rig part, not the body)", this);
+            zoneCollider = GetComponent<Collider>();
+        }
 
+        private void Update()
+        {
+            if (playerHead == null)
                 return;
-            }
+
+            // Tracks the head rather than the rig collider: the rig only moves when a locomotion
+            // provider moves it, so head-only movement (room-scale, or the simulator) would be missed.
+            var inside = zoneCollider.bounds.Contains(playerHead.position);
+            if (inside == wasInside)
+                return;
+
+            wasInside = inside;
 
             if (logDetections)
-                Debug.Log($"[Zone] {zoneName}: player ENTERED", this);
+                Debug.Log($"[Zone] {zoneName}: player {(inside ? "ENTERED" : "left")}", this);
 
-            Entered?.Invoke();
-        }
-
-        private void OnTriggerExit(Collider other)
-        {
-            if (logDetections && IsPlayerBody(other))
-                Debug.Log($"[Zone] {zoneName}: player left", this);
-        }
-
-        private static bool IsPlayerBody(Collider other)
-        {
-            // The hands are children of the XR Origin too, so match the rig body specifically -
-            // otherwise reaching an arm over the platform edge would count as arriving.
-            return other is CharacterController && other.GetComponentInParent<XROrigin>() != null;
+            if (inside)
+                Entered?.Invoke();
         }
     }
 }

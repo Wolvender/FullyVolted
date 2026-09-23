@@ -63,8 +63,9 @@ namespace FullyVolted.EditorTools
             EnsureEventSystem();
             AddSimulator();
 
-            var bottomZone = CreateZone("Bottom Zone", "Ground", new Vector3(1.2f, 1f, -0.5f), new Vector3(5f, 2f, 5f));
-            var topZone = CreateZone("Top Zone", "Work Platform", new Vector3(1.5f, 5.35f, 0f), new Vector3(2.2f, 1.2f, 1.8f));
+            var playerHead = ResolvePlayerHead(rig);
+            var bottomZone = CreateZone("Bottom Zone", "Ground", new Vector3(1.2f, 1f, -0.5f), new Vector3(5f, 2f, 5f), playerHead);
+            var topZone = CreateZone("Top Zone", "Work Platform", new Vector3(1.5f, 5.35f, 0f), new Vector3(2.2f, 1.2f, 1.8f), playerHead);
             var completeScreen = CreateCompleteScreen(out var restartButton);
 
             CreateProcedureController(topZone, bottomZone, completeScreen, rig.transform, startPose, restartButton);
@@ -106,6 +107,20 @@ namespace FullyVolted.EditorTools
             var rig = (GameObject)PrefabUtility.InstantiatePrefab(rigPrefab);
             rig.transform.SetPositionAndRotation(RigStartPosition, RigStartRotation);
             return rig;
+        }
+
+        private static Transform ResolvePlayerHead(GameObject rig)
+        {
+            var origin = rig.GetComponentInChildren<XROrigin>(true);
+            if (origin != null && origin.Camera != null)
+                return origin.Camera.transform;
+
+            var camera = rig.GetComponentInChildren<Camera>(true);
+            if (camera != null)
+                return camera.transform;
+
+            Debug.LogWarning("[FullyVolted] No camera found on the rig; zone detection will not work.");
+            return null;
         }
 
         private static Transform CreateStartPose()
@@ -192,7 +207,8 @@ namespace FullyVolted.EditorTools
             manager.AddComponent<XRInteractionManager>();
         }
 
-        private static PlayerZoneTrigger CreateZone(string objectName, string zoneName, Vector3 position, Vector3 size)
+        private static PlayerZoneTrigger CreateZone(string objectName, string zoneName, Vector3 position, Vector3 size,
+            Transform playerHead)
         {
             var zone = new GameObject(objectName);
             zone.transform.position = position;
@@ -204,6 +220,7 @@ namespace FullyVolted.EditorTools
             var trigger = zone.AddComponent<PlayerZoneTrigger>();
             var serialized = new SerializedObject(trigger);
             serialized.FindProperty("zoneName").stringValue = zoneName;
+            serialized.FindProperty("playerHead").objectReferenceValue = playerHead;
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
             return trigger;
