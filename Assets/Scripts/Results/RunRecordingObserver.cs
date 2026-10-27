@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FullyVolted.Procedure;
 using UnityEngine;
 using UnityEngine.Serialization;
@@ -13,9 +14,13 @@ namespace FullyVolted.Results
         private IRunStore store;
         private StepTimer timer;
         private string runId;
+        private bool runBegun;
+
+        // Steps that finished before the run was announced (the name is still being fetched). Sent right after it.
+        private readonly List<StepRecord> waiting = new List<StepRecord>();
 
         [SerializeField] private ProcedureController procedureController;
-        [Tooltip("Who is doing this run. Shown on the results page.")]
+        [Tooltip("Used when nobody has signed in on the portal (or the API is not reachable).")]
         [SerializeField] private string trainee = "Trainee";
         [Tooltip("Where results are saved (API config or Supabase config). Leave empty to play without saving.")]
         [FormerlySerializedAs("supabaseConfig")]
@@ -32,7 +37,12 @@ namespace FullyVolted.Results
             store = storeConfig.CreateStore();
             runId = Guid.NewGuid().ToString();
             timer = new StepTimer(Time.realtimeSinceStartupAsDouble);
-            store.BeginRun(runId, trainee);
+
+            var lookup = storeConfig.CreateTraineeLookup();
+            if (lookup == null)
+                BeginRun(null);
+            else
+                lookup.Fetch(BeginRun);
         }
 
         private void OnEnable()
@@ -52,8 +62,29 @@ namespace FullyVolted.Results
             if (store == null)
                 return;
 
-            if (timer.TryClose(result, Time.realtimeSinceStartupAsDouble, out var step))
+            if (!timer.TryClose(result, Time.realtimeSinceStartupAsDouble, out var step))
+                return;
+
+            if (runBegun)
                 store.SaveStep(runId, step);
+            else
+                waiting.Add(step);
+        }
+
+        // Called with the signed-in name, or null when there is none: then the name set above is used.
+        private void BeginRun(string signedIn)
+        {
+            if (this == null)
+                return;
+
+            var name = string.IsNullOrWhiteSpace(signedIn) ? trainee : signedIn;
+            Debug.Log($"[Results] Recording this run for '{name}'" + (signedIn == null ? " (nobody signed in on the portal)." : "."));
+
+            store.BeginRun(runId, name);
+            runBegun = true;
+            foreach (var step in waiting)
+                store.SaveStep(runId, step);
+            waiting.Clear();
         }
     }
 }

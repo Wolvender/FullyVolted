@@ -147,6 +147,7 @@ namespace FullyVolted.EditorTools
             var controller = CreateProcedureController(middleZone, topZone, bottomZone, attachmentMonitor, fallArrest, completeScreen, restartButton,
                 ppeItems, deEnergizeSteps);
             CreateStepFlash(controller, playerHead);
+            ChimeBuilder.CreateStepChimes(controller, EnvironmentBuilder.Folder);
             CreateObjectivePanel(controller, rig, playerHead);
 
             EditorSceneManager.MarkSceneDirty(scene);

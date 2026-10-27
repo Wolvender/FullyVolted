@@ -10,5 +10,8 @@ namespace FullyVolted.Results
         public abstract bool IsFilledIn { get; }
 
         public abstract IRunStore CreateStore();
+
+        // Backends that can tell who is at the station return a lookup; the rest use the name set on the observer.
+        public virtual ITraineeLookup CreateTraineeLookup() => null;
     }
 }

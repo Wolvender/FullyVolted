@@ -19,5 +19,7 @@ namespace FullyVolted.Results
         public override bool IsFilledIn => !string.IsNullOrWhiteSpace(baseUrl) && !string.IsNullOrWhiteSpace(apiKey);
 
         public override IRunStore CreateStore() => new ApiRunStore(this);
+
+        public override ITraineeLookup CreateTraineeLookup() => new ApiTraineeLookup(this);
     }
 }
