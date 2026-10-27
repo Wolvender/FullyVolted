@@ -65,3 +65,21 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# Supabase URL + key - stays local
+/[Aa]ssets/[Ss]ettings/Supabase Config.asset
+/[Aa]ssets/[Ss]ettings/Supabase Config.asset.meta
+
+# Own API (Api/) - secrets and local environment stay local
+/Api/.env
+/Api/.venv/
+__pycache__/
+/Database/mysql/*.local.sql
+
+# Web portal
+/Portal/node_modules/
+/Portal/dist/
+
+# Own API config - holds the API key
+/[Aa]ssets/[Ss]ettings/Api Config.asset
+/[Aa]ssets/[Ss]ettings/Api Config.asset.meta

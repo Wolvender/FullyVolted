@@ -1,0 +1,20 @@
+meta {
+  name: List runs (summary)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/runs
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The run_summary view: one row per run with total time, total mistakes, finished,
+  all_correct and the slowest step (JOIN + aggregate query).
+}

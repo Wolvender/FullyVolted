@@ -1,0 +1,35 @@
+meta {
+  name: Add step
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/runs/{{runId}}/steps
+  body: json
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+}
+
+body:json {
+  {
+    "step_order": 1,
+    "step_name": "PpeCheck",
+    "seconds": 42.5,
+    "mistakes": 1,
+    "correct": false
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+docs {
+  Run "Create run" first. Change step_order (1-5) and step_name to add more steps:
+  1 PpeCheck, 2 ClimbToMiddle, 3 ClimbToTop, 4 DeEnergize, 5 DescendToBottom.
+  Sending the same step_order twice for one run gives 409.
+}

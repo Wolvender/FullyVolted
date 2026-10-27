@@ -1,0 +1,21 @@
+meta {
+  name: Write without key (expect 401)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/runs
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "trainee": "Should be refused"
+  }
+}
+
+assert {
+  res.status: eq 401
+}
