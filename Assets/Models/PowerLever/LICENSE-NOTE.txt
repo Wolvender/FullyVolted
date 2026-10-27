@@ -1,0 +1,3 @@
+Lever Switch (FBX + BaseColor/Normal textures), downloaded from the user Downloads folder (lever-power-switch.zip) 2026-10-27.
+No licence file in the zip. Check the licence of the original download page before the client delivery.
+The FBX contains its own "Level_Down" animation; the OcclusionRoughness texture was not copied (packed ORM, not used by URP/Lit directly).
