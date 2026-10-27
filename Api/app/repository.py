@@ -99,3 +99,20 @@ def get_run(connection, run_id: str) -> dict:
 def ping(connection) -> None:
     with connection.cursor() as cursor:
         cursor.execute("select 1")
+
+
+def set_active_trainee(connection, name: str) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "insert into active_trainee (id, name) values (1, %s) "
+            "on duplicate key update name = values(name), set_at = current_timestamp(3)",
+            (name,),
+        )
+    connection.commit()
+
+
+def get_active_trainee(connection) -> dict:
+    with connection.cursor() as cursor:
+        cursor.execute("select name, set_at from active_trainee where id = 1")
+        row = cursor.fetchone()
+    return row or {"name": None, "set_at": None}

@@ -11,17 +11,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import repository
 from .auth import require_api_key
 from .db import get_connection
-from .models import RunCreate, RunCreated, RunDetail, RunSummary, StepCreate, StepStat
+from .models import (ActiveTrainee, ActiveTraineeSet, RunCreate, RunCreated, RunDetail, RunSummary, StepCreate,
+                     StepStat)
 from .settings import settings
 
 app = FastAPI(title="FullyVolted Results API", version="1.0.0")
 
 # The web portal runs on another port, so the browser asks permission first (CORS). Only the portal's
-# addresses may read, and only with GET: writes come from Unity, which is not a browser.
+# addresses may call it. GET reads; PUT is only for signing in with a name (/active-trainee). Run and step
+# writes come from Unity, which is not a browser, and need the API key.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.portal_origins,
-    allow_methods=["GET"],
+    allow_methods=["GET", "PUT"],
     allow_headers=["*"],
 )
 
@@ -71,3 +73,16 @@ def get_run(run_id: UUID, connection=Depends(get_connection)):
         return repository.get_run(connection, str(run_id))
     except repository.RunNotFound as error:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+
+
+# Signing in on the portal: no password, just "this is who is at the station". The name is not a secret and
+# the key stays out of the browser; it only decides what name the game puts on the next run.
+@app.put("/active-trainee", response_model=ActiveTrainee, tags=["trainee"])
+def sign_in(body: ActiveTraineeSet, connection=Depends(get_connection)):
+    repository.set_active_trainee(connection, body.name)
+    return repository.get_active_trainee(connection)
+
+
+@app.get("/active-trainee", response_model=ActiveTrainee, tags=["trainee"])
+def active_trainee(connection=Depends(get_connection)):
+    return repository.get_active_trainee(connection)

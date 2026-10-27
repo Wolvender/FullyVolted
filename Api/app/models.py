@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class RunCreate(BaseModel):
@@ -58,3 +58,17 @@ class StepStat(BaseModel):
     total_mistakes: int
     avg_mistakes: float
     percent_correct: float
+
+
+# A name as typed on the portal: surrounding spaces dropped, 1-100 characters.
+TraineeName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+
+
+class ActiveTraineeSet(BaseModel):
+    name: TraineeName
+
+
+class ActiveTrainee(BaseModel):
+    """Who the next run is recorded for. name is null when nobody has signed in yet."""
+    name: str | None
+    set_at: datetime | None

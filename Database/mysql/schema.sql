@@ -36,6 +36,15 @@ create table if not exists step_mistakes (
         references step_results (run_id, step_order) on delete cascade
 );
 
+-- Who is at the station right now: one row, set from the portal when a trainee signs in with their name,
+-- read by the game when a run starts. The game never needs a keyboard in VR.
+create table if not exists active_trainee (
+    id      tinyint      not null primary key default 1,
+    name    varchar(100) not null,
+    set_at  datetime(3)  not null default current_timestamp(3),
+    constraint active_trainee_single check (id = 1)
+);
+
 -- The custom query (contract: JOIN + aggregate). One row per run with its totals.
 -- MySQL has no bool_and / array_agg like Postgres, so: all steps correct = the lowest "correct" is 1,
 -- and the slowest step comes from a small sub-query per run.

@@ -34,3 +34,9 @@ export interface StepStat {
   avg_mistakes: number;
   percent_correct: number;
 }
+
+// Who the next run in the game is recorded for (null until someone signs in).
+export interface ActiveTrainee {
+  name: string | null;
+  set_at: string | null;
+}
