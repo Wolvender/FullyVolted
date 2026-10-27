@@ -14,6 +14,7 @@ namespace FullyVolted.Loop
         [SerializeField] private bool logDetections = true;
 
         public event Action Entered;
+        public event Action Exited;
 
         public string ZoneName => zoneName;
         public bool IsPlayerInside => wasInside;
@@ -46,6 +47,8 @@ namespace FullyVolted.Loop
 
             if (inside)
                 Entered?.Invoke();
+            else
+                Exited?.Invoke();
         }
     }
 }

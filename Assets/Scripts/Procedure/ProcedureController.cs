@@ -1,26 +1,15 @@
 using System.Collections.Generic;
-using FullyVolted.Loop;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
 namespace FullyVolted.Procedure
 {
-    public class ProcedureController : MonoBehaviour
+    // The "context" of the State pattern: it holds the current state and swaps it, but has no idea
+    // which states exist or in what order they run. That knowledge lives in ProcedureInstaller.
+    public class ProcedureController : MonoBehaviour, IProcedureContext
     {
         private readonly List<IStepObserver> observers = new List<IStepObserver>();
         private IProcedureState currentState;
-
-        [SerializeField] private PlayerZoneTrigger topZone;
-        [SerializeField] private PlayerZoneTrigger bottomZone;
-        [SerializeField] private GameObject completeScreen;
-
-        private void Start()
-        {
-            if (completeScreen != null)
-                completeScreen.SetActive(false);
-
-            TransitionTo(new ClimbState(this, topZone, bottomZone));
-        }
 
         private void OnDestroy()
         {
@@ -50,11 +39,6 @@ namespace FullyVolted.Procedure
             currentState?.Exit();
             currentState = next;
             currentState?.Enter();
-        }
-
-        public void CompleteProcedure()
-        {
-            TransitionTo(new ProcedureCompleteState(completeScreen));
         }
 
         public void RestartProcedure()

@@ -1,15 +1,20 @@
 using System.Collections.Generic;
 using FullyVolted.Climbing;
+using FullyVolted.Feedback;
 using FullyVolted.Loop;
 using FullyVolted.Procedure;
+using FullyVolted.Results;
 using Unity.XR.CoreUtils;
 using UnityEditor;
 using UnityEditor.Events;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
 using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Interaction.Toolkit.Locomotion.Climbing;
 using UnityEngine.XR.Interaction.Toolkit.UI;
 
@@ -19,18 +24,58 @@ namespace FullyVolted.EditorTools
     {
         private const string ScenePath = "Assets/Scenes/ClimbLoop.unity";
         private const string MaterialFolder = "Assets/Materials";
-        private const string RigPrefabName = "XR Origin (XR Rig)";
-        private const string SimulatorPrefabName = "XR Interaction Simulator";
+        internal const string RigPrefabName = "XR Origin (XR Rig)";
 
-        private const int RungCount = 10;
-        private const float FirstRungHeight = 0.9f;
-        private const float RungSpacing = 0.5f;
-        private const float RungOffsetX = 0.45f;
+        // Holds the Supabase URL + key. Gitignored: create it via Create > FullyVolted > Supabase Config.
+        private const string SupabaseConfigPath = "Assets/Settings/Supabase Config.asset";
+        // Our own API. Preferred over Supabase when its asset exists. Gitignored (holds the key).
+        private const string ApiConfigPath = "Assets/Settings/Api Config.asset";
+
         private const float RungInteractionDistance = 0.3f;
-        private const float PlatformSurfaceY = 4.775f;
 
-        private static readonly Vector3 RigStartPosition = new Vector3(2.2f, 0f, -1.4f);
-        private static readonly Quaternion RigStartRotation = Quaternion.Euler(0f, -58f, 0f);
+        internal static readonly Vector3 RigStartPosition = new Vector3(2.2f, 0f, -1.4f);
+        internal static readonly Quaternion RigStartRotation = Quaternion.Euler(0f, -58f, 0f);
+
+        // Imported by glTFast. The pack is one model with ~30 props side by side; only radio tower_01 is used.
+        internal const string TowerPackPath = "Assets/Models/TowersPack/towers_lamps_and_structures.glb";
+        internal const string TowerNodePrefix = "radio tower_01";
+
+        // The tower's steel frame, ladders and platforms - everything that is walked on or climbed.
+        private const string ClimbableNodeName = "Object_5";
+
+        // The model's rungs are ~1cm thick; the grab point around each one is this much fatter so the
+        // glow is visible and the hand has something to find.
+        private const float ClimbPointPadding = 0.04f;
+
+        // ~15m footprint. In view from the rig start, clear of the PPE bench.
+        internal static readonly Vector3 TowerPosition = new Vector3(-10.48f, 0f, 10f);
+
+        // Zones test the head position. Ground: head below this height, anywhere around the tower and the
+        // bench. Middle platform and top deck: head in this band above the floor, over the tower's footprint.
+        private const float GroundZoneHeadHeight = 2.6f;
+        private const float GroundZoneSize = 60f;
+        private const float PlatformZoneMinHead = 0.9f;
+        private const float PlatformZoneMaxHead = 2.6f;
+        private const float PlatformZoneSize = 10f;
+
+        // Free scooter helmet pack. Its materials are Built-in: convert them to URP once (see tasks/todo.md).
+        private const string HelmetPrefabPath = "Assets/Scooter helmet/Prefab/helmet_red.prefab";
+        private const float HelmetSize = 0.3f;
+
+        private const float PpeBenchHeight = 0.8f;
+        private static readonly Vector3 PpeBenchPosition = new Vector3(1.84f, 0f, -0.47f);
+
+        // The switch panel is on the top deck (~3x3m), this far in from the last ladder: past the hatch it comes
+        // up through, so the player steps off the ladder, takes a step, and faces it.
+        private const float SwitchPanelDistance = 1.8f;
+        private const float SwitchPanelHeight = 1.25f;
+
+        // How far below the last ladder's top rung to look for the top deck (it is ~1.4m on this tower).
+        private const float TopDeckSearchDepth = 3f;
+
+        // Behind the player stepping off the bottom of the ladder.
+        private const float CompleteScreenDistance = 2.5f;
+        private const float CompleteScreenHeight = 1.7f;
 
         [MenuItem("Tools/FullyVolted/Build Climb Scene")]
         public static void BuildClimbScene()
@@ -47,10 +92,8 @@ namespace FullyVolted.EditorTools
 
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
-            CreateLight();
-            CreateGround();
-            CreatePole();
-            CreatePlatform();
+            // Sun, sky, fog, post-processing and the terrain (also the ground): shared with the landscape test scene.
+            EnvironmentBuilder.Create();
 
             var rig = InstantiateRig(rigPrefab);
 
@@ -58,17 +101,53 @@ namespace FullyVolted.EditorTools
             if (climbProvider == null)
                 Debug.LogWarning("[FullyVolted] No ClimbProvider found on the rig; climbing will not work.");
 
-            CreateRungs(climbProvider);
+            if (!CreateRadioTower(climbProvider, out var tower, out var route, out var topDeckHeight))
+            {
+                EditorUtility.DisplayDialog("Climb Scene Builder",
+                    "The radio tower or its ladder could not be found, so the procedure has nowhere to happen. " +
+                    "See the console for details.", "OK");
+                return;
+            }
+
             EnsureInteractionManager();
             EnsureEventSystem();
-            AddSimulator();
+            // No XR Interaction Simulator in the scene: it is spawned by XRI's
+            // "Use XR Interaction Simulator in scenes" project setting instead, so
+            // switching between headset and keyboard testing is one checkbox.
 
             var playerHead = ResolvePlayerHead(rig);
-            var bottomZone = CreateZone("Bottom Zone", "Ground", new Vector3(1.2f, 1f, -0.5f), new Vector3(5f, 2f, 5f), playerHead);
-            var topZone = CreateZone("Top Zone", "Work Platform", new Vector3(1.5f, 5.35f, 0f), new Vector3(2.2f, 1.2f, 1.8f), playerHead);
-            var completeScreen = CreateCompleteScreen(out var restartButton);
+            if (playerHead != null)
+                EnvironmentBuilder.PrepareCamera(playerHead.GetComponent<Camera>());
+            // Everything placed relative to the tower is parented under it, so moving the tower in the scene
+            // takes the zones, anchors, switch panel and complete screen along.
+            var bottomZone = CreateZone("Bottom Zone", "Ground",
+                new Vector3(TowerPosition.x, GroundZoneHeadHeight / 2f, TowerPosition.z),
+                new Vector3(GroundZoneSize, GroundZoneHeadHeight, GroundZoneSize), playerHead, tower);
+            var middleZone = CreatePlatformZone("Middle Zone", "Middle Platform", route.MiddlePlatformHeight, playerHead, tower);
+            var topZone = CreatePlatformZone("Top Zone", "Top Deck", topDeckHeight, playerHead, tower);
 
-            CreateProcedureController(topZone, bottomZone, completeScreen, restartButton);
+            var completeScreenPosition = new Vector3(route.Bottom.x, CompleteScreenHeight, route.Bottom.z) -
+                                         route.First.TowardPlatform * CompleteScreenDistance;
+            var completeScreen = CreateCompleteScreen(completeScreenPosition, Quaternion.LookRotation(-route.First.TowardPlatform),
+                out var restartButton);
+            completeScreen.transform.SetParent(tower, true);
+
+            LightingEffects.AddTowerBeacon(tower, EnvironmentBuilder.Folder);
+            WindBuilder.CreateAudio(playerHead, topDeckHeight, EnvironmentBuilder.Folder);
+
+            var ppeItems = CreatePpeBench();
+            var last = route.Last;
+            var deEnergizeSteps = CreateSwitchPanel(
+                new Vector3(last.Top.x, topDeckHeight + SwitchPanelHeight, last.Top.z) + last.TowardPlatform * SwitchPanelDistance,
+                Quaternion.LookRotation(last.TowardPlatform), tower);
+
+            var attachmentMonitor = LanyardBuilder.CreateHarness(rig, playerHead, out var fallArrest);
+            LanyardBuilder.CreateAnchors(route, tower);
+
+            var controller = CreateProcedureController(middleZone, topZone, bottomZone, attachmentMonitor, fallArrest, completeScreen, restartButton,
+                ppeItems, deEnergizeSteps);
+            CreateStepFlash(controller, playerHead);
+            CreateObjectivePanel(controller, rig, playerHead);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
@@ -78,7 +157,7 @@ namespace FullyVolted.EditorTools
             Debug.Log("[FullyVolted] Built climb scene at " + ScenePath);
         }
 
-        private static GameObject LoadPrefab(string prefabName)
+        internal static GameObject LoadPrefab(string prefabName)
         {
             foreach (var guid in AssetDatabase.FindAssets(prefabName + " t:Prefab"))
             {
@@ -88,19 +167,6 @@ namespace FullyVolted.EditorTools
             }
 
             return null;
-        }
-
-        private static void AddSimulator()
-        {
-            var simulatorPrefab = LoadPrefab(SimulatorPrefabName);
-            if (simulatorPrefab == null)
-            {
-                Debug.LogWarning("[FullyVolted] XR Interaction Simulator prefab not found; " +
-                                 "desktop testing without a headset will not work. Run Tools > FullyVolted > Import XRI Samples.");
-                return;
-            }
-
-            PrefabUtility.InstantiatePrefab(simulatorPrefab);
         }
 
         private static GameObject InstantiateRig(GameObject rigPrefab)
@@ -137,75 +203,190 @@ namespace FullyVolted.EditorTools
         }
 
 
-        private static void CreateLight()
-        {
-            var lightObject = new GameObject("Directional Light");
-            lightObject.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
 
-            var light = lightObject.AddComponent<Light>();
-            light.type = LightType.Directional;
-            light.shadows = LightShadows.Soft;
+        private static bool CreateRadioTower(ClimbProvider climbProvider, out Transform towerRoot, out LadderRoute route,
+            out float topDeckHeight)
+        {
+            towerRoot = null;
+            route = default;
+            topDeckHeight = 0f;
+            var pack = AssetDatabase.LoadAssetAtPath<GameObject>(TowerPackPath);
+            if (pack == null)
+            {
+                Debug.LogWarning("[FullyVolted] Tower pack not found at " + TowerPackPath +
+                                 ". Is the glTFast package installed so the .glb imports?");
+                return false;
+            }
+
+            // A plain copy (no prefab link), so the tower can be lifted out and the rest thrown away.
+            // The meshes and materials stay shared sub-assets of the .glb.
+            var packInstance = Object.Instantiate(pack);
+            var tower = FindChild(packInstance.transform, child => child.name.StartsWith(TowerNodePrefix));
+            if (tower == null)
+            {
+                Object.DestroyImmediate(packInstance);
+                Debug.LogWarning("[FullyVolted] No node starting with '" + TowerNodePrefix + "' in the tower pack.");
+                return false;
+            }
+
+            // A plain root (scale 1, no rotation) that the model and everything placed around it hang under.
+            // Kept unscaled on purpose: under the model's x8.25 every child would need its scale compensated.
+            towerRoot = new GameObject("Radio Tower").transform;
+            towerRoot.position = TowerPosition;
+
+            // Keeps the pack's import scale (x8.25 on this node) and rotation.
+            tower.SetParent(towerRoot, true);
+            Object.DestroyImmediate(packInstance);
+
+            tower.name = "Tower Model";
+            tower.localPosition = Vector3.zero;
+
+            // Never moves. Not an occluder: it's an open lattice you can see straight through.
+            foreach (var child in tower.GetComponentsInChildren<Transform>(true))
+                GameObjectUtility.SetStaticEditorFlags(child.gameObject, StaticEditorFlags.BatchingStatic);
+
+            // Exact match: a prefix check would also hit Object_50..Object_59 elsewhere in the pack.
+            var climbable = FindChild(tower, child => child.name == ClimbableNodeName);
+            if (climbable == null || !climbable.TryGetComponent<MeshFilter>(out var meshFilter))
+            {
+                Debug.LogWarning("[FullyVolted] No '" + ClimbableNodeName + "' mesh on the radio tower; it will not be walkable or climbable.");
+                return false;
+            }
+
+            // Walkable: the platforms and stairs become solid for the rig's CharacterController.
+            climbable.gameObject.AddComponent<MeshCollider>().sharedMesh = meshFilter.sharedMesh;
+
+            var worldScale = Mathf.Abs(climbable.lossyScale.x);
+            var rungs = LadderRungFinder.FindRungs(meshFilter.sharedMesh, worldScale);
+            CreateClimbPoints(climbable, meshFilter.sharedMesh, rungs, worldScale, climbProvider);
+
+            if (!LadderRoute.TryFind(climbable, rungs, tower.position, out route))
+            {
+                Debug.LogWarning("[FullyVolted] Found no ladder on the radio tower to use as the training route.");
+                return false;
+            }
+
+            // Probed beside the hatch, where the switch panel goes: straight down the hatch there is no floor.
+            var last = route.Last;
+            var probe = last.Top + last.TowardPlatform * SwitchPanelDistance;
+            if (!PlatformFloorFinder.TryFindFloorBelow(meshFilter.sharedMesh, climbable, probe, TopDeckSearchDepth, out topDeckHeight))
+            {
+                Debug.LogWarning("[FullyVolted] Found no deck at the top of the last ladder; the top checkpoint has nowhere to go.");
+                return false;
+            }
+
+            Debug.Log($"[FullyVolted] Route: {route.Sections.Length} ladders, {route.Bottom.y:0.0}m to {last.Top.y:0.0}m. " +
+                      $"Middle platform at {route.MiddlePlatformHeight:0.0}m, top deck at {topDeckHeight:0.0}m.");
+            return true;
         }
 
-        private static void CreateGround()
+        private static void CreateClimbPoints(Transform climbable, Mesh mesh, List<LadderRungFinder.Rung> rungs,
+            float worldScale, ClimbProvider climbProvider)
         {
-            var ground = CreatePrimitive(PrimitiveType.Plane, "Ground", Vector3.zero, new Vector3(3f, 1f, 3f));
-            ApplyMaterial(ground, "Ground", new Color(0.32f, 0.34f, 0.30f));
-            GameObjectUtility.SetStaticEditorFlags(ground, StaticEditorFlags.BatchingStatic | StaticEditorFlags.OccluderStatic);
+            // The whole frame is one mesh, so one highlight would light up the entire tower. Instead every
+            // ladder rung gets its own grab point, and only the rung near the hand glows.
+            var material = GetClimbPointMaterial();
+            var padding = Vector3.one * (ClimbPointPadding / worldScale);
+
+            var parent = new GameObject("Climb Points").transform;
+            parent.SetParent(climbable, false);
+
+            for (int i = 0; i < rungs.Count; i++)
+            {
+                CreateClimbPoint($"Climb Point {i + 1:000}", parent, rungs[i].Center, rungs[i].Rotation,
+                    rungs[i].Size + padding, material, climbProvider);
+            }
+
+            // The side rails too: past the top rung they are the only thing to hold while stepping onto
+            // the platform, so without them every ladder is a dead end.
+            var rails = LadderRailFinder.FindRails(mesh, rungs, worldScale);
+            for (int i = 0; i < rails.Count; i++)
+            {
+                CreateClimbPoint($"Rail Point {i + 1:000}", parent, rails[i].Center, rails[i].Rotation,
+                    rails[i].Size + padding, material, climbProvider);
+            }
+
+            Debug.Log($"[FullyVolted] Radio tower: {rungs.Count} climb points on the ladder rungs, " +
+                      $"{rails.Count} on the ladder rails.");
         }
 
-        private static void CreatePole()
+        private static void CreateClimbPoint(string pointName, Transform parent, Vector3 localPosition,
+            Quaternion localRotation, Vector3 localScale, Material material, ClimbProvider climbProvider)
         {
-            var pole = CreatePrimitive(PrimitiveType.Cylinder, "Mast Pole", new Vector3(0f, 3f, 0f), new Vector3(0.36f, 3f, 0.36f));
-            ApplyMaterial(pole, "Steel", new Color(0.38f, 0.40f, 0.44f));
-            GameObjectUtility.SetStaticEditorFlags(pole, StaticEditorFlags.BatchingStatic | StaticEditorFlags.OccluderStatic);
+            var point = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            point.name = pointName;
+            point.transform.SetParent(parent, false);
+            point.transform.localPosition = localPosition;
+            point.transform.localRotation = localRotation;
+            point.transform.localScale = localScale;
+
+            var pointRenderer = point.GetComponent<MeshRenderer>();
+            pointRenderer.sharedMaterial = material;
+            pointRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            pointRenderer.receiveShadows = false;
+
+            MakeClimbHold(point, climbProvider);
         }
 
-        private static void CreatePlatform()
+        private static void MakeClimbHold(GameObject hold, ClimbProvider climbProvider)
         {
-            var platform = CreatePrimitive(PrimitiveType.Cube, "Work Platform", new Vector3(1.5f, 4.7f, 0f), new Vector3(2.4f, 0.15f, 2f));
-            ApplyMaterial(platform, "Platform", new Color(0.45f, 0.45f, 0.48f));
-            GameObjectUtility.SetStaticEditorFlags(platform, StaticEditorFlags.BatchingStatic | StaticEditorFlags.OccluderStatic);
+            var climbInteractable = hold.AddComponent<ClimbInteractable>();
+            climbInteractable.climbProvider = climbProvider;
+
+            // Default is 0.1m, which is hard to hit while reaching and impossible to trigger with a
+            // pointing ray. This gates hover and grab alike, so it stays within arm's reach.
+            climbInteractable.maxInteractionDistance = RungInteractionDistance;
+
+            // ClimbInteractable is [RequireComponent(typeof(Rigidbody))], so adding it also adds a
+            // dynamic body. Holds are fixed - the player moves, not the hold.
+            var body = hold.GetComponent<Rigidbody>();
+            body.isKinematic = true;
+            body.useGravity = false;
+
+            hold.AddComponent<ClimbHoldHighlight>();
         }
 
-        private static void CreateRungs(ClimbProvider climbProvider)
+        private static Material GetClimbPointMaterial()
         {
-            var parent = new GameObject("Rungs").transform;
-            var rungMaterial = GetMaterial("Rung", new Color(0.85f, 0.55f, 0.12f));
+            const string path = MaterialFolder + "/Climb Point.mat";
+            var existing = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (existing != null)
+                return existing;
+
+            // Transparent with zero alpha: invisible at rest, so the model's own rung is what you see.
+            // ClimbHoldHighlight raises the alpha and the emission while a hand hovers.
+            var material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            material.SetFloat("_Surface", 1f);
+            material.SetFloat("_Blend", 0f);
+            material.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
+            material.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
+            material.SetFloat("_ZWrite", 0f);
+            material.SetOverrideTag("RenderType", "Transparent");
+            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.renderQueue = (int)RenderQueue.Transparent;
+            material.SetColor("_BaseColor", new Color(1f, 0.62f, 0.18f, 0f));
 
             // Without the keyword, the shader never samples _EmissionColor, so the hover glow is invisible.
-            rungMaterial.EnableKeyword("_EMISSION");
-            rungMaterial.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
-            rungMaterial.SetColor("_EmissionColor", Color.black);
-            EditorUtility.SetDirty(rungMaterial);
+            material.EnableKeyword("_EMISSION");
+            material.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+            material.SetColor("_EmissionColor", Color.black);
 
-            for (int i = 0; i < RungCount; i++)
-            {
-                var height = FirstRungHeight + i * RungSpacing;
-                var rung = CreatePrimitive(PrimitiveType.Cube, $"Rung {i + 1:00}",
-                    new Vector3(RungOffsetX, height, 0f), new Vector3(0.55f, 0.07f, 0.14f));
-
-                rung.transform.SetParent(parent, true);
-                rung.GetComponent<Renderer>().sharedMaterial = rungMaterial;
-
-                var climbInteractable = rung.AddComponent<ClimbInteractable>();
-                climbInteractable.climbProvider = climbProvider;
-
-                // Default is 0.1m, which is hard to hit while reaching and impossible to trigger with a
-                // pointing ray. This gates hover and grab alike, so it stays within arm's reach.
-                climbInteractable.maxInteractionDistance = RungInteractionDistance;
-
-                // ClimbInteractable is [RequireComponent(typeof(Rigidbody))], so adding it also adds a
-                // dynamic body. Rungs are fixed holds - the player moves, not the rung.
-                var body = rung.GetComponent<Rigidbody>();
-                body.isKinematic = true;
-                body.useGravity = false;
-
-                rung.AddComponent<ClimbHoldHighlight>();
-            }
+            AssetDatabase.CreateAsset(material, path);
+            return material;
         }
 
-        private static void EnsureInteractionManager()
+        internal static Transform FindChild(Transform parent, System.Predicate<Transform> match)
+        {
+            foreach (var child in parent.GetComponentsInChildren<Transform>(true))
+            {
+                if (match(child))
+                    return child;
+            }
+
+            return null;
+        }
+
+        internal static void EnsureInteractionManager()
         {
             if (Object.FindFirstObjectByType<XRInteractionManager>() != null)
                 return;
@@ -214,11 +395,20 @@ namespace FullyVolted.EditorTools
             manager.AddComponent<XRInteractionManager>();
         }
 
+        private static PlayerZoneTrigger CreatePlatformZone(string objectName, string zoneName, float floorHeight, Transform playerHead,
+            Transform parent)
+        {
+            return CreateZone(objectName, zoneName,
+                new Vector3(TowerPosition.x, floorHeight + (PlatformZoneMinHead + PlatformZoneMaxHead) / 2f, TowerPosition.z),
+                new Vector3(PlatformZoneSize, PlatformZoneMaxHead - PlatformZoneMinHead, PlatformZoneSize), playerHead, parent);
+        }
+
         private static PlayerZoneTrigger CreateZone(string objectName, string zoneName, Vector3 position, Vector3 size,
-            Transform playerHead)
+            Transform playerHead, Transform parent)
         {
             var zone = new GameObject(objectName);
             zone.transform.position = position;
+            zone.transform.SetParent(parent, true);
 
             var collider = zone.AddComponent<BoxCollider>();
             collider.isTrigger = true;
@@ -233,10 +423,10 @@ namespace FullyVolted.EditorTools
             return trigger;
         }
 
-        private static GameObject CreateCompleteScreen(out Button restartButton)
+        private static GameObject CreateCompleteScreen(Vector3 position, Quaternion rotation, out Button restartButton)
         {
             var canvasObject = new GameObject("Complete Screen");
-            canvasObject.transform.SetPositionAndRotation(new Vector3(0.5f, 1.7f, -0.35f), Quaternion.Euler(0f, 122f, 0f));
+            canvasObject.transform.SetPositionAndRotation(position, rotation);
             canvasObject.transform.localScale = Vector3.one * 0.003f;
 
             var canvas = canvasObject.AddComponent<Canvas>();
@@ -320,25 +510,333 @@ namespace FullyVolted.EditorTools
             eventSystem.AddComponent<XRUIInputModule>();
         }
 
-        private static void CreateProcedureController(PlayerZoneTrigger topZone, PlayerZoneTrigger bottomZone,
-            GameObject completeScreen, Button restartButton)
+        private static ProcedureController CreateProcedureController(PlayerZoneTrigger middleZone, PlayerZoneTrigger topZone,
+            PlayerZoneTrigger bottomZone,
+            AttachmentMonitor attachmentMonitor, FallArrest fallArrest, GameObject completeScreen, Button restartButton, XRBaseInteractable[] ppeItems, XRBaseInteractable[] deEnergizeSteps)
         {
             var controllerObject = new GameObject("Procedure Controller");
             var controller = controllerObject.AddComponent<ProcedureController>();
 
-            var serialized = new SerializedObject(controller);
-            serialized.FindProperty("topZone").objectReferenceValue = topZone;
-            serialized.FindProperty("bottomZone").objectReferenceValue = bottomZone;
-            serialized.FindProperty("completeScreen").objectReferenceValue = completeScreen;
-            serialized.ApplyModifiedPropertiesWithoutUndo();
-
             if (restartButton != null)
                 UnityEventTools.AddPersistentListener(restartButton.onClick, controller.RestartProcedure);
+
+            var installer = controllerObject.AddComponent<ProcedureInstaller>();
+            var serializedInstaller = new SerializedObject(installer);
+            serializedInstaller.FindProperty("controller").objectReferenceValue = controller;
+            serializedInstaller.FindProperty("middleZone").objectReferenceValue = middleZone;
+            serializedInstaller.FindProperty("topZone").objectReferenceValue = topZone;
+            serializedInstaller.FindProperty("bottomZone").objectReferenceValue = bottomZone;
+            serializedInstaller.FindProperty("attachmentMonitor").objectReferenceValue = attachmentMonitor;
+            serializedInstaller.FindProperty("fallArrest").objectReferenceValue = fallArrest;
+            serializedInstaller.FindProperty("completeScreen").objectReferenceValue = completeScreen;
+            AssignArray(serializedInstaller.FindProperty("ppeItems"), ppeItems);
+            AssignArray(serializedInstaller.FindProperty("deEnergizeSteps"), deEnergizeSteps);
+            serializedInstaller.ApplyModifiedPropertiesWithoutUndo();
 
             var observer = controllerObject.AddComponent<DebugStepObserver>();
             var serializedObserver = new SerializedObject(observer);
             serializedObserver.FindProperty("procedureController").objectReferenceValue = controller;
             serializedObserver.ApplyModifiedPropertiesWithoutUndo();
+
+            // Optional: without a filled-in config asset the game runs normally and just doesn't save results.
+            var recorder = controllerObject.AddComponent<RunRecordingObserver>();
+            var serializedRecorder = new SerializedObject(recorder);
+            serializedRecorder.FindProperty("procedureController").objectReferenceValue = controller;
+            serializedRecorder.FindProperty("storeConfig").objectReferenceValue =
+                (Object)AssetDatabase.LoadAssetAtPath<ApiConfig>(ApiConfigPath)
+                ?? AssetDatabase.LoadAssetAtPath<SupabaseConfig>(SupabaseConfigPath);
+            serializedRecorder.ApplyModifiedPropertiesWithoutUndo();
+
+            return controller;
+        }
+
+        private static void AssignArray(SerializedProperty property, Object[] values)
+        {
+            property.arraySize = values.Length;
+            for (int i = 0; i < values.Length; i++)
+                property.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
+        }
+
+        private static XRBaseInteractable[] CreatePpeBench()
+        {
+            // Faces the rig's start pose, so the labels read correctly on spawn.
+            var rotation = RigStartRotation;
+            var right = rotation * Vector3.right;
+
+            var bench = CreatePrimitive(PrimitiveType.Cube, "PPE Bench",
+                PpeBenchPosition + Vector3.up * (PpeBenchHeight / 2f), new Vector3(1f, PpeBenchHeight, 0.4f));
+            bench.transform.rotation = rotation;
+            ApplyMaterial(bench, "Platform", new Color(0.45f, 0.45f, 0.48f));
+            GameObjectUtility.SetStaticEditorFlags(bench, StaticEditorFlags.BatchingStatic);
+
+            var material = GetMaterial("Equipment", new Color(0.20f, 0.45f, 0.80f));
+            var itemCenter = PpeBenchPosition + Vector3.up * (PpeBenchHeight + 0.06f);
+
+            // Laid out shuffled on purpose - the bench must not give away the procedure order.
+            var helmet = CreateModelInteractable("Helmet", itemCenter + Vector3.up * (HelmetSize / 2f - 0.06f),
+                rotation, HelmetPrefabPath, HelmetSize, material);
+
+            // The array order IS the procedure order. Just the helmet: no harness model was available.
+            return new[] { helmet };
+        }
+
+        // A real model as an interactable: a wrapper named after the item (the procedure reports that name),
+        // the model scaled to `size` and centred inside it, and a box collider around it for XRI to hit.
+        // Falls back to the plain cube if the model is not in the project, so the builder never breaks on it.
+        private static XRBaseInteractable CreateModelInteractable(string objectName, Vector3 position, Quaternion rotation,
+            string prefabPath, float size, Material fallbackMaterial)
+        {
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefab == null)
+            {
+                Debug.LogWarning($"[FullyVolted] No model at '{prefabPath}'; {objectName} falls back to a cube.");
+                return CreateLabelledInteractable(objectName, position, rotation, fallbackMaterial, null);
+            }
+
+            // Measured at the origin with no rotation, so the renderer bounds are the model's own size.
+            var root = new GameObject(objectName);
+            var model = (GameObject)PrefabUtility.InstantiatePrefab(prefab, root.transform);
+            UrpMaterials.ConvertAll(model);
+
+            var collider = root.AddComponent<BoxCollider>();
+            collider.size = ModelFit.FitCentered(model, size);
+
+            root.transform.SetPositionAndRotation(position, rotation);
+            CreateWorldLabel(objectName, position + Vector3.up * (size / 2f + 0.08f), rotation, null);
+
+            return root.AddComponent<XRSimpleInteractable>();
+        }
+
+        private static XRBaseInteractable[] CreateSwitchPanel(Vector3 position, Quaternion rotation, Transform parent)
+        {
+            // rotation looks the way the player walks up to the panel; the buttons face them.
+            var right = rotation * Vector3.right;
+
+            // A group at the button row, so the panel, its buttons and their labels move as one.
+            var group = new GameObject("Switch Panel").transform;
+            group.SetPositionAndRotation(position, rotation);
+            group.SetParent(parent, true);
+
+            var panel = CreatePrimitive(PrimitiveType.Cube, "Panel",
+                position + rotation * Vector3.forward * 0.08f, new Vector3(1.7f, 0.7f, 0.04f));
+            panel.transform.rotation = rotation;
+            panel.transform.SetParent(group, true);
+            ApplyMaterial(panel, "Steel", new Color(0.38f, 0.40f, 0.44f));
+            GameObjectUtility.SetStaticEditorFlags(panel, StaticEditorFlags.BatchingStatic);
+
+            var material = GetMaterial("Switch", new Color(0.75f, 0.15f, 0.12f));
+
+            var groundAndLock = CreateLabelledInteractable("Ground And Lock", position - right * 0.6f, rotation, material, group);
+            var testVoltage = CreateLabelledInteractable("Test Voltage", position + right * 0.6f, rotation, material, group);
+
+            // The downloaded lever is the main control: pulling it is the Switch Off step. Cube if the model is missing.
+            var switchOff = LeverModel.Create("Switch Off", position, rotation, group);
+            if (switchOff != null)
+                CreateWorldLabel("Switch Off", position + Vector3.up * 0.36f, rotation, group);
+            else
+                switchOff = CreateLabelledInteractable("Switch Off", position, rotation, material, group);
+
+            return new[] { switchOff, testVoltage, groundAndLock };
+        }
+
+        private static XRBaseInteractable CreateLabelledInteractable(string objectName, Vector3 position,
+            Quaternion rotation, Material material, Transform parent)
+        {
+            var item = CreatePrimitive(PrimitiveType.Cube, objectName, position, Vector3.one * 0.12f);
+            item.transform.rotation = rotation;
+            item.transform.SetParent(parent, true);
+            item.GetComponent<Renderer>().sharedMaterial = material;
+
+            CreateWorldLabel(objectName, position + Vector3.up * 0.14f, rotation, parent);
+
+            // Stock XRI: fires selectEntered when grabbed but never moves, and pulls in no Rigidbody.
+            return item.AddComponent<XRSimpleInteractable>();
+        }
+
+        private static void CreateWorldLabel(string content, Vector3 position, Quaternion rotation, Transform parent)
+        {
+            var canvasObject = new GameObject(content + " Label");
+            canvasObject.transform.SetPositionAndRotation(position, rotation);
+            canvasObject.transform.localScale = Vector3.one * 0.001f;
+            canvasObject.transform.SetParent(parent, true);
+
+            var canvas = canvasObject.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.WorldSpace;
+            ((RectTransform)canvasObject.transform).sizeDelta = new Vector2(300f, 60f);
+
+            var label = CreateLabel("Text", canvasObject.transform, content, 32);
+            var labelRect = (RectTransform)label.transform;
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+            label.GetComponent<Text>().horizontalOverflow = HorizontalWrapMode.Overflow;
+        }
+
+        private static void CreateStepFlash(ProcedureController controller, Transform playerHead)
+        {
+            // The Starter Assets camera has post-processing off, which would make every Volume do nothing.
+            if (playerHead != null && playerHead.TryGetComponent<Camera>(out var camera))
+                camera.GetUniversalAdditionalCameraData().renderPostProcessing = true;
+
+            var correctFlash = CreateFlashVolume("Correct Flash", new Color(0.45f, 1f, 0.45f));
+            var incorrectFlash = CreateFlashVolume("Incorrect Flash", new Color(1f, 0.3f, 0.3f));
+
+            var feedbackObject = new GameObject("Step Feedback");
+            var flash = feedbackObject.AddComponent<StepResultFlash>();
+            var serialized = new SerializedObject(flash);
+            serialized.FindProperty("procedureController").objectReferenceValue = controller;
+            serialized.FindProperty("correctFlash").objectReferenceValue = correctFlash;
+            serialized.FindProperty("incorrectFlash").objectReferenceValue = incorrectFlash;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        // One entry per step, in the order ProcedureInstaller chains them.
+        private static readonly Objective[] ObjectiveTexts =
+        {
+            new Objective("Put on your helmet",
+                "Pick up the HELMET from the bench."),
+            new Objective("Climb to the middle platform",
+                "Use the ladder. Clip a carabiner onto an anchor and keep one clipped at all times."),
+            new Objective("Climb to the top of the tower",
+                "Keep climbing and moving your carabiners up. Never let go unclipped."),
+            new Objective("Cut the power",
+                "At the top, press the buttons in order: SWITCH OFF, TEST VOLTAGE, then GROUND AND LOCK."),
+            new Objective("Climb down safely",
+                "Power is off. Stay clipped in all the way back to the ground."),
+        };
+
+        // ~0.42m x 0.22m: a screen that sits above the hand.
+        private const float ObjectivePanelScale = 0.0007f;
+        private static readonly Vector2 ObjectivePanelSize = new Vector2(600f, 320f);
+
+        // Where the "look at your hand" sign stands, measured from the rig's start pose.
+        private const float HandSignDistance = 2.2f;
+        private const float HandSignHeight = 1.9f;
+
+        private static void CreateObjectivePanel(ProcedureController controller, GameObject rig, Transform playerHead)
+        {
+            var hand = FindChild(rig.transform, child => child.name == "Left Controller");
+            if (hand == null)
+                Debug.LogWarning("[FullyVolted] No 'Left Controller' on the rig; the objective panel will not follow a hand.");
+
+            var sign = CreateHandSign();
+
+            var canvasObject = new GameObject("Objective Panel");
+            canvasObject.transform.localScale = Vector3.one * ObjectivePanelScale;
+
+            var canvas = canvasObject.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.WorldSpace;
+            ((RectTransform)canvasObject.transform).sizeDelta = ObjectivePanelSize;
+            canvasObject.AddComponent<CanvasGroup>().interactable = false;
+
+            CreateStretchedImage("Background", canvasObject.transform, new Color(0.04f, 0.05f, 0.07f, 0.88f));
+
+            var mission = CreatePanelText("Mission", canvasObject.transform, 22, new Color(1f, 0.8f, 0.2f), 0.85f, 1f);
+            var stepCounter = CreatePanelText("Step Counter", canvasObject.transform, 24, new Color(0.7f, 0.75f, 0.8f), 0.71f, 0.85f);
+            var title = CreatePanelText("Title", canvasObject.transform, 44, Color.white, 0.48f, 0.71f);
+            var instruction = CreatePanelText("Instruction", canvasObject.transform, 30, new Color(0.9f, 0.92f, 0.95f), 0.04f, 0.48f);
+            instruction.horizontalOverflow = HorizontalWrapMode.Wrap;
+            instruction.verticalOverflow = VerticalWrapMode.Overflow;
+
+            var panel = canvasObject.AddComponent<ObjectivePanel>();
+            var serializedPanel = new SerializedObject(panel);
+            serializedPanel.FindProperty("procedureController").objectReferenceValue = controller;
+            serializedPanel.FindProperty("missionText").objectReferenceValue = mission;
+            serializedPanel.FindProperty("stepCounterText").objectReferenceValue = stepCounter;
+            serializedPanel.FindProperty("titleText").objectReferenceValue = title;
+            serializedPanel.FindProperty("instructionText").objectReferenceValue = instruction;
+            var objectives = serializedPanel.FindProperty("objectives");
+            objectives.arraySize = ObjectiveTexts.Length;
+            for (int i = 0; i < ObjectiveTexts.Length; i++)
+            {
+                var element = objectives.GetArrayElementAtIndex(i);
+                element.FindPropertyRelative("title").stringValue = ObjectiveTexts[i].title;
+                element.FindPropertyRelative("instruction").stringValue = ObjectiveTexts[i].instruction;
+            }
+            serializedPanel.ApplyModifiedPropertiesWithoutUndo();
+
+            var attached = canvasObject.AddComponent<HandAttachedPanel>();
+            var serializedAttached = new SerializedObject(attached);
+            serializedAttached.FindProperty("hand").objectReferenceValue = hand;
+            serializedAttached.FindProperty("head").objectReferenceValue = playerHead;
+            serializedAttached.ApplyModifiedPropertiesWithoutUndo();
+
+            var fade = canvasObject.AddComponent<GazeFade>();
+            var serializedFade = new SerializedObject(fade);
+            serializedFade.FindProperty("head").objectReferenceValue = playerHead;
+            serializedFade.FindProperty("hideOnFirstReveal").objectReferenceValue = sign;
+            serializedFade.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        // Floats in front of the spawn point and disappears once the trainee has looked at their hand.
+        private static GameObject CreateHandSign()
+        {
+            var forward = RigStartRotation * Vector3.forward;
+            var position = RigStartPosition + forward * HandSignDistance + Vector3.up * HandSignHeight;
+
+            var canvasObject = new GameObject("Look At Your Hand Sign");
+            canvasObject.transform.SetPositionAndRotation(position, Quaternion.LookRotation(forward));
+            canvasObject.transform.localScale = Vector3.one * 0.0016f;
+
+            var canvas = canvasObject.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.WorldSpace;
+            ((RectTransform)canvasObject.transform).sizeDelta = new Vector2(760f, 260f);
+
+            CreateStretchedImage("Background", canvasObject.transform, new Color(0.85f, 0.55f, 0.12f, 0.95f));
+
+            var title = CreatePanelText("Title", canvasObject.transform, 48, Color.black, 0.45f, 1f);
+            title.text = "LOOK AT YOUR LEFT HAND";
+            var hint = CreatePanelText("Hint", canvasObject.transform, 32, Color.black, 0.05f, 0.45f);
+            hint.text = "Your mission is shown there";
+
+            return canvasObject;
+        }
+
+        private static Text CreatePanelText(string objectName, Transform parent, int fontSize, Color color, float anchorMinY, float anchorMaxY)
+        {
+            var label = CreateLabel(objectName, parent, string.Empty, fontSize);
+            var rect = (RectTransform)label.transform;
+            rect.anchorMin = new Vector2(0f, anchorMinY);
+            rect.anchorMax = new Vector2(1f, anchorMaxY);
+            rect.offsetMin = new Vector2(30f, 0f);
+            rect.offsetMax = new Vector2(-30f, 0f);
+
+            var text = label.GetComponent<Text>();
+            text.color = color;
+            text.resizeTextForBestFit = false;
+            return text;
+        }
+
+        private static VolumeFlash CreateFlashVolume(string objectName, Color tint)
+        {
+            var volumeObject = new GameObject(objectName);
+            var volume = volumeObject.AddComponent<Volume>();
+            volume.isGlobal = true;
+            volume.weight = 0f;
+            volume.sharedProfile = GetFlashProfile(objectName, tint);
+
+            return volumeObject.AddComponent<VolumeFlash>();
+        }
+
+        private static VolumeProfile GetFlashProfile(string profileName, Color tint)
+        {
+            var path = $"Assets/Settings/{profileName}.asset";
+            var existing = AssetDatabase.LoadAssetAtPath<VolumeProfile>(path);
+            if (existing != null)
+                return existing;
+
+            var profile = ScriptableObject.CreateInstance<VolumeProfile>();
+            AssetDatabase.CreateAsset(profile, path);
+
+            // The colour filter multiplies the whole image, so the view is tinted without going dark.
+            var colorAdjustments = profile.Add<ColorAdjustments>();
+            colorAdjustments.colorFilter.Override(tint);
+
+            // Volume components are ScriptableObjects too - they only survive a save as sub-assets.
+            AssetDatabase.AddObjectToAsset(colorAdjustments, profile);
+            EditorUtility.SetDirty(profile);
+            return profile;
         }
 
         private static Font LoadLegacyUiFont()
@@ -365,7 +863,7 @@ namespace FullyVolted.EditorTools
             target.GetComponent<Renderer>().sharedMaterial = GetMaterial(materialName, color);
         }
 
-        private static Material GetMaterial(string materialName, Color color)
+        internal static Material GetMaterial(string materialName, Color color)
         {
             if (!AssetDatabase.IsValidFolder(MaterialFolder))
                 AssetDatabase.CreateFolder("Assets", "Materials");
