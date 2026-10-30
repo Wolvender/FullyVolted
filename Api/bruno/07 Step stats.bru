@@ -1,0 +1,19 @@
+meta {
+  name: Step stats
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/stats/steps
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  SQL aggregate per step (what the portal's climb profile shows).
+}

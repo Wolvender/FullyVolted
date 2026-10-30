@@ -1,0 +1,25 @@
+meta {
+  name: Sign in
+  type: http
+  seq: 9
+}
+
+put {
+  url: {{baseUrl}}/active-trainee
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "Bruno test"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  What the portal's sign-in does. No key needed. Run "Who is signed in" afterwards to see it.
+}

@@ -18,6 +18,9 @@ namespace FullyVolted.EditorTools
         private const float Size = 0.5f;
         private const float ColliderPadding = 0.08f;
 
+        // The model comes out turned a quarter in the panel's plane. Set to -90 if it ends up the wrong way round.
+        private const float RollDegrees = 90f;
+
         // Returns the interactable on a wrapper named `objectName`, or null when the model is not in the project
         // (the caller then falls back to the plain cube). `rotation` looks the way the player walks up to it.
         public static XRBaseInteractable Create(string objectName, Vector3 position, Quaternion rotation, Transform parent)
@@ -40,6 +43,8 @@ namespace FullyVolted.EditorTools
                 renderer.sharedMaterial = material;
 
             FaceTheFront(model);
+            // Then spin it in the plane of the panel, so the handle swings the way the player pulls it.
+            model.transform.rotation = Quaternion.AngleAxis(RollDegrees, Vector3.forward) * model.transform.rotation;
 
             var colliderSize = ModelFit.FitCentered(model, Size);
             wrapper.AddComponent<BoxCollider>().size = colliderSize + Vector3.one * ColliderPadding;

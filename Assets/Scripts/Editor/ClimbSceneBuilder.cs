@@ -63,7 +63,11 @@ namespace FullyVolted.EditorTools
         private const float HelmetSize = 0.3f;
 
         private const float PpeBenchHeight = 0.8f;
-        private static readonly Vector3 PpeBenchPosition = new Vector3(1.84f, 0f, -0.47f);
+
+        // The player starts at the foot of the first ladder, this far out from its rungs and facing them. The helmet
+        // bench stands beside them, a step to the right, measured in the player's own frame (x right, z forward).
+        private const float SpawnDistanceFromLadder = 1.3f;
+        private static readonly Vector3 PpeBenchOffset = new Vector3(1.0f, 0f, 0f);
 
         // The switch panel is on the top deck (~3x3m), this far in from the last ladder: past the hatch it comes
         // up through, so the player steps off the ladder, takes a step, and faces it.
@@ -109,6 +113,15 @@ namespace FullyVolted.EditorTools
                 return;
             }
 
+            // The ladder decides where everything starts: the player at its foot, facing it, with the helmet bench beside them.
+            var spawnForward = route.First.TowardPlatform;
+            var spawnPosition = new Vector3(route.Bottom.x, 0f, route.Bottom.z) - spawnForward * SpawnDistanceFromLadder;
+            var spawnRotation = Quaternion.LookRotation(spawnForward);
+            rig.transform.SetPositionAndRotation(spawnPosition, spawnRotation);
+
+            // Decoration only: a plaza, streets and low-poly buildings round the tower.
+            TownBuilder.Create(tower, EnvironmentBuilder.Folder);
+
             EnsureInteractionManager();
             EnsureEventSystem();
             // No XR Interaction Simulator in the scene: it is spawned by XRI's
@@ -134,12 +147,13 @@ namespace FullyVolted.EditorTools
 
             LightingEffects.AddTowerBeacon(tower, EnvironmentBuilder.Folder);
             WindBuilder.CreateAudio(playerHead, topDeckHeight, EnvironmentBuilder.Folder);
+            WindBuilder.AttachWispsToPlayer(playerHead, topDeckHeight);
 
-            var ppeItems = CreatePpeBench();
+            var ppeItems = CreatePpeBench(spawnPosition, spawnRotation);
             var last = route.Last;
             var deEnergizeSteps = CreateSwitchPanel(
                 new Vector3(last.Top.x, topDeckHeight + SwitchPanelHeight, last.Top.z) + last.TowardPlatform * SwitchPanelDistance,
-                Quaternion.LookRotation(last.TowardPlatform), tower);
+                Quaternion.LookRotation(last.TowardPlatform), topDeckHeight, tower);
 
             var attachmentMonitor = LanyardBuilder.CreateHarness(rig, playerHead, out var fallArrest);
             LanyardBuilder.CreateAnchors(route, tower);
@@ -148,6 +162,7 @@ namespace FullyVolted.EditorTools
                 ppeItems, deEnergizeSteps);
             CreateStepFlash(controller, playerHead);
             ChimeBuilder.CreateStepChimes(controller, EnvironmentBuilder.Folder);
+            TowerFeedbackBuilder.Create(rig, playerHead, fallArrest, controller, topDeckHeight, EnvironmentBuilder.Folder);
             CreateObjectivePanel(controller, rig, playerHead);
 
             EditorSceneManager.MarkSceneDirty(scene);
@@ -558,20 +573,20 @@ namespace FullyVolted.EditorTools
                 property.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
         }
 
-        private static XRBaseInteractable[] CreatePpeBench()
+        private static XRBaseInteractable[] CreatePpeBench(Vector3 spawnPosition, Quaternion spawnRotation)
         {
-            // Faces the rig's start pose, so the labels read correctly on spawn.
-            var rotation = RigStartRotation;
-            var right = rotation * Vector3.right;
+            // Faces the way the player looks on spawn, so the labels read correctly.
+            var rotation = spawnRotation;
+            var benchPosition = spawnPosition + rotation * PpeBenchOffset;
 
             var bench = CreatePrimitive(PrimitiveType.Cube, "PPE Bench",
-                PpeBenchPosition + Vector3.up * (PpeBenchHeight / 2f), new Vector3(1f, PpeBenchHeight, 0.4f));
+                benchPosition + Vector3.up * (PpeBenchHeight / 2f), new Vector3(1f, PpeBenchHeight, 0.4f));
             bench.transform.rotation = rotation;
             ApplyMaterial(bench, "Platform", new Color(0.45f, 0.45f, 0.48f));
             GameObjectUtility.SetStaticEditorFlags(bench, StaticEditorFlags.BatchingStatic);
 
             var material = GetMaterial("Equipment", new Color(0.20f, 0.45f, 0.80f));
-            var itemCenter = PpeBenchPosition + Vector3.up * (PpeBenchHeight + 0.06f);
+            var itemCenter = benchPosition + Vector3.up * (PpeBenchHeight + 0.06f);
 
             // Laid out shuffled on purpose - the bench must not give away the procedure order.
             var helmet = CreateModelInteractable("Helmet", itemCenter + Vector3.up * (HelmetSize / 2f - 0.06f),
@@ -608,7 +623,13 @@ namespace FullyVolted.EditorTools
             return root.AddComponent<XRSimpleInteractable>();
         }
 
-        private static XRBaseInteractable[] CreateSwitchPanel(Vector3 position, Quaternion rotation, Transform parent)
+        // Where the control cabinet is bolted to the deck, and how big it is. The panel plate sits on its front face.
+        private const float CabinetWidth = 1.9f;
+        private const float CabinetDepth = 0.4f;
+        private const float CabinetHeight = 1.8f;
+        private const float PlinthHeight = 0.12f;
+
+        private static XRBaseInteractable[] CreateSwitchPanel(Vector3 position, Quaternion rotation, float floorHeight, Transform parent)
         {
             // rotation looks the way the player walks up to the panel; the buttons face them.
             var right = rotation * Vector3.right;
@@ -617,6 +638,8 @@ namespace FullyVolted.EditorTools
             var group = new GameObject("Switch Panel").transform;
             group.SetPositionAndRotation(position, rotation);
             group.SetParent(parent, true);
+
+            CreateControlCabinet(position, rotation, floorHeight, group);
 
             var panel = CreatePrimitive(PrimitiveType.Cube, "Panel",
                 position + rotation * Vector3.forward * 0.08f, new Vector3(1.7f, 0.7f, 0.04f));
@@ -638,6 +661,38 @@ namespace FullyVolted.EditorTools
                 switchOff = CreateLabelledInteractable("Switch Off", position, rotation, material, group);
 
             return new[] { switchOff, testVoltage, groundAndLock };
+        }
+
+        // A steel control cabinet standing on the deck, so the switches are mounted on something and not floating.
+        // Its front face sits just behind the buttons; the panel plate is the raised face plate on it.
+        private static void CreateControlCabinet(Vector3 panelPosition, Quaternion rotation, float floorHeight, Transform group)
+        {
+            var forward = rotation * Vector3.forward;
+            var frontFace = new Vector3(panelPosition.x, floorHeight, panelPosition.z) + forward * 0.10f;
+            var color = new Color(0.30f, 0.33f, 0.36f);
+
+            // The body stands on the deck from the plinth up.
+            var body = CreatePrimitive(PrimitiveType.Cube, "Cabinet",
+                frontFace + forward * (CabinetDepth / 2f) + Vector3.up * (CabinetHeight / 2f),
+                new Vector3(CabinetWidth, CabinetHeight, CabinetDepth));
+
+            // A wider plinth at the foot and a cap on top: reads as a bolted-down box, not a floating slab.
+            var plinth = CreatePrimitive(PrimitiveType.Cube, "Cabinet Plinth",
+                frontFace + forward * (CabinetDepth / 2f) + Vector3.up * (PlinthHeight / 2f),
+                new Vector3(CabinetWidth + 0.2f, PlinthHeight, CabinetDepth + 0.2f));
+            var cap = CreatePrimitive(PrimitiveType.Cube, "Cabinet Cap",
+                frontFace + forward * (CabinetDepth / 2f) + Vector3.up * CabinetHeight,
+                new Vector3(CabinetWidth + 0.1f, 0.06f, CabinetDepth + 0.1f));
+
+            foreach (var part in new[] { body, plinth, cap })
+            {
+                part.transform.rotation = rotation;
+                part.transform.SetParent(group, true);
+                ApplyMaterial(part, "Steel", new Color(0.38f, 0.40f, 0.44f));
+                GameObjectUtility.SetStaticEditorFlags(part, StaticEditorFlags.BatchingStatic);
+            }
+
+            ApplyMaterial(body, "Cabinet Steel", color);
         }
 
         private static XRBaseInteractable CreateLabelledInteractable(string objectName, Vector3 position,
@@ -711,9 +766,11 @@ namespace FullyVolted.EditorTools
         private const float ObjectivePanelScale = 0.0007f;
         private static readonly Vector2 ObjectivePanelSize = new Vector2(600f, 320f);
 
-        // Where the "look at your hand" sign stands, measured from the rig's start pose.
-        private const float HandSignDistance = 2.2f;
-        private const float HandSignHeight = 1.9f;
+        // Where the "look at your hand" sign floats, measured from the rig's start pose: close (the ladder is only
+        // ~1.3m ahead), a little to the left and slightly above eye level, so it never covers the first rungs.
+        private const float HandSignDistance = 0.8f;
+        private const float HandSignLeft = 0.55f;
+        private const float HandSignHeight = 1.75f;
 
         private static void CreateObjectivePanel(ProcedureController controller, GameObject rig, Transform playerHead)
         {
@@ -721,7 +778,7 @@ namespace FullyVolted.EditorTools
             if (hand == null)
                 Debug.LogWarning("[FullyVolted] No 'Left Controller' on the rig; the objective panel will not follow a hand.");
 
-            var sign = CreateHandSign();
+            var sign = CreateHandSign(rig.transform);
 
             var canvasObject = new GameObject("Objective Panel");
             canvasObject.transform.localScale = Vector3.one * ObjectivePanelScale;
@@ -771,10 +828,11 @@ namespace FullyVolted.EditorTools
         }
 
         // Floats in front of the spawn point and disappears once the trainee has looked at their hand.
-        private static GameObject CreateHandSign()
+        private static GameObject CreateHandSign(Transform rig)
         {
-            var forward = RigStartRotation * Vector3.forward;
-            var position = RigStartPosition + forward * HandSignDistance + Vector3.up * HandSignHeight;
+            var forward = rig.rotation * Vector3.forward;
+            var right = rig.rotation * Vector3.right;
+            var position = rig.position + forward * HandSignDistance - right * HandSignLeft + Vector3.up * HandSignHeight;
 
             var canvasObject = new GameObject("Look At Your Hand Sign");
             canvasObject.transform.SetPositionAndRotation(position, Quaternion.LookRotation(forward));

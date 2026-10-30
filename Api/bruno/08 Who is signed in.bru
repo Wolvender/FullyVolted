@@ -1,0 +1,19 @@
+meta {
+  name: Who is signed in
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/active-trainee
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The name the game puts on the next run. name is null when nobody has signed in.
+}

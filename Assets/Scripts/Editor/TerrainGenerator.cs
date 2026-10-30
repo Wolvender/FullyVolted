@@ -19,7 +19,8 @@ namespace FullyVolted.EditorTools
         // The terrain is lowered by this much so the flat middle sits exactly at world y = 0, where the tower is.
         internal const float FlatHeight = 6f;
         // Flat inside this radius, rolling hills from here out to HillsFullRadius.
-        private const float FlatRadius = 70f;
+        // Wide enough for the town round the tower (it reaches ~95m from the world origin at its far corners).
+        private const float FlatRadius = 100f;
         private const float HillsFullRadius = 300f;
         private const float HillHeight = 58f;
         // Hills climb again toward the rim, hiding the end of the terrain.

@@ -7,19 +7,29 @@ namespace FullyVolted.EditorTools
 {
     // Trees and bushes for the terrain, made entirely in code: low-poly, flat-shaded models (pine, oak, birch,
     // bush) saved as prefabs, then scattered with Unity's own terrain tree system, which draws them instanced.
-    // Groves and open meadows come from a noise mask; the work area around the tower stays clear.
+    // A dense forest closes in right at the edge of the town (a square round the tower, see TownLayout), thins out
+    // toward the horizon, and leaves a clear corridor for the one road that leads out of the town.
     internal static class VegetationBuilder
     {
-        private const int MaxTrees = 2800;
-        private const int MaxBushes = 1500;
-        private const int Attempts = 30000;
+        private const int MaxTrees = 11000;
+        private const int MaxBushes = 3500;
+        private const int Attempts = 400000;
 
-        // Scattered in a ring around the tower: nothing inside the inner radius, nothing past the fog.
-        private const float InnerRadius = 40f;
+        // Where trees may stand: inside this radius of the world origin (the terrain's rim hides the rest).
         private const float OuterRadius = 340f;
         private const float MaxSlopeDegrees = 30f;
 
-        private const float TreeDistance = 300f;
+        // The forest fades in over this many metres past the town's edge, and thins to a third of its density
+        // between FullDensityUntil and the horizon.
+        private const float EdgeFade = 8f;
+        private const float FullDensityUntil = 120f;
+        private const float FarDensity = 0.3f;
+
+        // Kept clear of trees on either side of the road's centre line (asphalt, shoulder, a verge), then fading in.
+        private const float RoadClearance = TownLayout.ExitRoadHalfWidth + TownLayout.ExitRoadShoulder + 2f;
+        private const float RoadFade = 5f;
+
+        private const float TreeDistance = 240f;
         private const float BillboardDistance = 120f;
 
         private enum Kind { Pine = 0, Oak = 1, Birch = 2, Bush = 3 }
@@ -63,40 +73,33 @@ namespace FullyVolted.EditorTools
             int trees = 0, bushes = 0;
             var size = data.size.x;
 
+            var tower = ClimbSceneBuilder.TowerPosition;
+            var towerXZ = new Vector2(tower.x, tower.z);
+            var route = TownLayout.ExitRoute(towerXZ);
+
             for (int attempt = 0; attempt < Attempts && (trees < MaxTrees || bushes < MaxBushes); attempt++)
             {
-                // Uniform over the ring's area, so density is even rather than bunched at the centre.
-                var radius = Mathf.Sqrt(Mathf.Lerp(InnerRadius * InnerRadius, OuterRadius * OuterRadius, Next(random)));
-                var angle = Next(random) * Mathf.PI * 2f;
-                var nx = radius * Mathf.Cos(angle) / size + 0.5f;
-                var nz = radius * Mathf.Sin(angle) / size + 0.5f;
+                // Uniform over the terrain, kept inside the rim; the density below does the shaping.
+                var x = (Next(random) * 2f - 1f) * OuterRadius;
+                var z = (Next(random) * 2f - 1f) * OuterRadius;
+                if (x * x + z * z > OuterRadius * OuterRadius)
+                    continue;
+
+                var isBush = Next(random) < 0.28f;
+                if (isBush ? bushes >= MaxBushes : trees >= MaxTrees)
+                    continue;
+
+                var nx = x / size + 0.5f;
+                var nz = z / size + 0.5f;
+                var density = ForestDensity(x, z, towerXZ, route, Mathf.PerlinNoise(nx * 9f + 3.1f, nz * 9f + 8.4f));
+                if (Next(random) > (isBush ? density * 0.7f : density))
+                    continue;
 
                 if (data.GetSteepness(nx, nz) > MaxSlopeDegrees)
                     continue;
 
-                // Low-frequency noise: where it is high there is a grove, where it is low there is open meadow.
-                var grove = Mathf.PerlinNoise(nx * 9f + 3.1f, nz * 9f + 8.4f);
                 var worldHeight = data.GetInterpolatedHeight(nx, nz) - TerrainGenerator.FlatHeight;
-
-                Kind kind;
-                float chance;
-                if (Next(random) < 0.4f)
-                {
-                    if (bushes >= MaxBushes)
-                        continue;
-                    kind = Kind.Bush;
-                    chance = Mathf.Lerp(0.5f, 0.25f, grove) * Smooth(40f, 80f, radius);
-                }
-                else
-                {
-                    if (trees >= MaxTrees)
-                        continue;
-                    kind = PickTree(random, worldHeight);
-                    chance = Smooth(0.45f, 0.65f, grove) * Smooth(55f, 120f, radius);
-                }
-
-                if (Next(random) > chance)
-                    continue;
+                var kind = isBush ? Kind.Bush : PickTree(random, worldHeight);
 
                 var scale = kind == Kind.Bush ? Mathf.Lerp(0.7f, 1.4f, Next(random)) : Mathf.Lerp(0.75f, 1.35f, Next(random));
                 instances.Add(new TreeInstance
@@ -111,22 +114,38 @@ namespace FullyVolted.EditorTools
                     lightmapColor = Color.white
                 });
 
-                if (kind == Kind.Bush) bushes++; else trees++;
+                if (isBush) bushes++; else trees++;
             }
 
             Debug.Log($"[FullyVolted] Vegetation: {trees} trees and {bushes} bushes.");
             return instances.ToArray();
         }
 
-        // Pines on the higher ground, a mix lower down.
+        // 0 = nothing grows here, 1 = as thick as it gets.
+        private static float ForestDensity(float x, float z, Vector2 tower, Vector2[] route, float noise)
+        {
+            // The town is a square, so measure along the axes, not as a circle.
+            var fromTown = Mathf.Max(Mathf.Abs(x - tower.x), Mathf.Abs(z - tower.y));
+            var outsideTown = Smooth(TownLayout.TownEdge, TownLayout.TownEdge + EdgeFade, fromTown);
+            if (outsideTown <= 0f)
+                return 0f;
+
+            var offRoad = Smooth(RoadClearance, RoadClearance + RoadFade, TownLayout.DistanceToRoute(route, new Vector2(x, z)));
+            var thinning = Mathf.Lerp(1f, FarDensity, Smooth(FullDensityUntil, OuterRadius, fromTown));
+
+            // A little unevenness so it is not a perfect carpet, but no meadows: this is a thick forest.
+            return outsideTown * offRoad * thinning * Mathf.Lerp(0.75f, 1f, noise);
+        }
+
+        // Mostly conifers and oaks with some birch, and only pine on the high ground.
         private static Kind PickTree(System.Random random, float worldHeight)
         {
             var roll = Next(random);
             if (worldHeight > 18f)
                 return roll < 0.7f ? Kind.Pine : Kind.Oak;
 
-            if (roll < 0.30f) return Kind.Pine;
-            return roll < 0.75f ? Kind.Oak : Kind.Birch;
+            if (roll < 0.40f) return Kind.Pine;
+            return roll < 0.78f ? Kind.Oak : Kind.Birch;
         }
 
         private static float Next(System.Random random)

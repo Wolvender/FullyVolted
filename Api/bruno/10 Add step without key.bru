@@ -1,0 +1,25 @@
+meta {
+  name: Add step without key
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/runs/{{runId}}/steps
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "step_order": 2,
+    "step_name": "ClimbToMiddle",
+    "seconds": 10,
+    "mistakes": 0,
+    "correct": true
+  }
+}
+
+assert {
+  res.status: eq 401
+}

@@ -31,7 +31,7 @@ namespace FullyVolted.EditorTools
             main.prewarm = true;
             main.playOnAwake = true;
             main.simulationSpace = ParticleSystemSimulationSpace.World;
-            main.maxParticles = 120;
+            main.maxParticles = 300;
             // Slow on purpose: a wisp draws itself across the sky over several seconds and then fades away.
             main.startLifetime = new ParticleSystem.MinMaxCurve(6f, 8f);
             main.startSpeed = new ParticleSystem.MinMaxCurve(4f, 7f);
@@ -40,13 +40,14 @@ namespace FullyVolted.EditorTools
             main.gravityModifier = 0f;
 
             var emission = particles.emission;
-            emission.rateOverTime = 8f;
+            emission.rateOverTime = 14f;
 
-            // A wide, tall box around the tower: wisps start low and high, near and far.
+            // A wide, tall box around the emitter: wisps start low and high, near and far. In the climb scene the
+            // emitter follows the player (see AttachWispsToPlayer), so this box is always centred on you.
             var shape = particles.shape;
             shape.enabled = true;
             shape.shapeType = ParticleSystemShapeType.Box;
-            shape.scale = new Vector3(160f, 45f, 160f);
+            shape.scale = new Vector3(120f, 60f, 120f);
 
             // Gentle swirling, so the streaks curve instead of flying straight.
             var noise = particles.noise;
@@ -90,6 +91,27 @@ namespace FullyVolted.EditorTools
             renderer.receiveShadows = false;
 
             particles.Play();
+        }
+
+        // Climb scene only: the wisps follow the head and get denser toward the top deck, like the wind sound.
+        // Run after CreateWisps (EnvironmentBuilder.Create), which makes the "Wind Wisps" object.
+        public static void AttachWispsToPlayer(Transform head, float topDeckHeight)
+        {
+            var wisps = GameObject.Find("Wind Wisps");
+            if (wisps == null || head == null)
+            {
+                Debug.LogWarning("[FullyVolted] Wind wisps or player head not found; the wisps will not follow the player.");
+                return;
+            }
+
+            wisps.transform.position = head.position;
+
+            var follower = wisps.AddComponent<WindWisps>();
+            var serialized = new SerializedObject(follower);
+            serialized.FindProperty("head").objectReferenceValue = head;
+            serialized.FindProperty("particles").objectReferenceValue = wisps.GetComponent<ParticleSystem>();
+            serialized.FindProperty("topHeight").floatValue = topDeckHeight;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
         }
 
         private static Material GetWispMaterial(string folder)
