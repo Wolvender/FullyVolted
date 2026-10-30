@@ -83,3 +83,9 @@ __pycache__/
 # Own API config - holds the API key
 /[Aa]ssets/[Ss]ettings/Api Config.asset
 /[Aa]ssets/[Ss]ettings/Api Config.asset.meta
+
+# Unity crash-recovery scenes and one-off scene exports dumped in the Assets root
+/[Aa]ssets/_Recovery/
+/[Aa]ssets/_Recovery.meta
+/[Aa]ssets/*.glb
+/[Aa]ssets/*.glb.meta
